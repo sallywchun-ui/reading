@@ -1,9 +1,9 @@
-"""Korean 40-sound web trainer built with Streamlit.
+"""Korean 40-sound web trainer with robust audio playback for Streamlit.
 
-This module implements an interactive Korean alphabet (Hangul) pronunciation
-trainer. It supports multi-phase progression (auto-advance when a phase is
-mastered), text-to-speech playback via gTTS with server-side caching, and a
-skip action that does not penalize the learner's mastery progress.
+This module implements a web-based Hangul trainer featuring multi-phase
+progression, dynamic text-to-speech audio streaming via gTTS, and an
+autoplay-compliant audio delivery architecture designed to bypass modern
+browser media engagement restrictions safely.
 
 Typical usage example:
     streamlit run main_web.py
@@ -15,23 +15,24 @@ import base64
 import io
 import logging
 import random
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, Final, List, Optional
 
 import streamlit as st
 from gtts import gTTS
 from gtts.tts import gTTSError
 
-# Module-level logger setup
-logging.basicConfig(level=logging.INFO)
+# Configure module-level logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 logger = logging.getLogger(__name__)
 
-# --- Application Configuration and Data ---
-# Number of consecutive correct answers required to master a character.
-MASTERY_GOAL: int = 3
+# --- Domain Constants and Curriculum Data ---
 
-# Immutable source-of-truth for all 40 Hangul learning phases.
-PHASE_DATA: Dict[str, Dict[str, str]] = {
+MASTERY_GOAL: Final[int] = 3
+
+PHASE_DATA: Final[Dict[str, Dict[str, str]]] = {
     "Phase 1: 基礎音 (Basic Vowels & Consonants)": {
         "ㅏ": "a", "ㅓ": "eo", "ㅗ": "o", "ㅜ": "u", "ㅡ": "eu", "ㅣ": "i",
         "ㄱ": "g", "ㄴ": "n", "ㄷ": "d", "ㄹ": "r", "ㅁ": "m", "ㅂ": "b",
@@ -48,28 +49,20 @@ PHASE_DATA: Dict[str, Dict[str, str]] = {
     },
 }
 
-# Fixed traversal order of phases derived from PHASE_DATA.
-PHASE_ORDER: List[str] = list(PHASE_DATA.keys())
+PHASE_ORDER: Final[List[str]] = list(PHASE_DATA.keys())
 
 
-# --- Text-to-Speech Service ---
+# --- Audio Generation and Serialization Service ---
 
 @st.cache_data(show_spinner=False, ttl=None)
 def get_tts_audio_bytes(text: str) -> Optional[bytes]:
-    """Generates Korean speech audio bytes for a given character via gTTS.
-
-    Results are cached per unique `text` value for the lifetime of the
-    Streamlit process, eliminating redundant outbound network calls.
+    """Synthesizes Korean speech audio using gTTS with process-level caching.
 
     Args:
-        text: The Korean Hangul character or string to synthesize.
+        text: Single Korean Hangul character or phrase to synthesize.
 
     Returns:
-        The raw MP3 audio bytes on success, or None if speech synthesis
-        failed due to network or service errors.
-
-    Raises:
-        None. All internal exceptions are logged and caught gracefully.
+        Raw MP3 bytes upon success, or None if network/API errors occur.
     """
     try:
         buffer = io.BytesIO()
@@ -77,42 +70,71 @@ def get_tts_audio_bytes(text: str) -> Optional[bytes]:
         tts.write_to_fp(buffer)
         return buffer.getvalue()
     except gTTSError as exc:
-        logger.warning("gTTS service error while synthesizing '%s': %s", text, exc)
+        logger.error("gTTS API failure for character '%s': %s", text, exc)
         return None
-    except (ConnectionError, OSError) as exc:
-        logger.warning("Network error while synthesizing '%s': %s", text, exc)
+    except (ConnectionError, OSError, TimeoutError) as exc:
+        logger.error("Network connectivity issue synthesizing '%s': %s", text, exc)
         return None
 
 
-def render_audio_player(text: str) -> None:
-    """Renders an autoplaying, hidden HTML5 audio element for the given text.
+def render_audio_controller(text: str, auto_play: bool = True) -> None:
+    """Renders robust audio playback using Web Audio API and Fallback controls.
 
-    Fetches cached TTS audio for `text` and embeds it as a Base64 data URI.
+    Embeds a resilient JavaScript snippet that attempts programmatic playback
+    via Base64 Data URI. If blocked by browser autoplay policies, it logs
+    a non-intrusive warning and falls back to user interaction.
 
     Args:
-        text: The Korean text to speak aloud.
+        text: The Korean character to pronounce.
+        auto_play: Whether to attempt automatic audio playback.
 
     Returns:
-        None.
+        None. Renders HTML/JS directly into Streamlit DOM.
     """
     audio_bytes = get_tts_audio_bytes(text)
     if audio_bytes is None:
-        st.warning("⚠️ 語音服務暫時無法使用，請先自行記憶發音。")
+        st.warning("⚠️ 語音服務暫時無法連線，請依字形練習。")
         return
 
     encoded_audio = base64.b64encode(audio_bytes).decode("utf-8")
+    audio_id = f"audio_{abs(hash(text))}_{random.randint(1000, 9999)}"
+
+    # Embedded HTML5 with explicit play Promise handling
     audio_html = f"""
-        <audio autoplay="true">
+    <div style="margin-top: 10px; margin-bottom: 10px; text-align: center;">
+        <audio id="{audio_id}" preload="auto" controls style="width: 100%; max-width: 320px; height: 36px;">
             <source src="data:audio/mpeg;base64,{encoded_audio}" type="audio/mpeg">
+            您的瀏覽器不支援 Audio 標籤。
         </audio>
+    </div>
+    <script>
+        (function() {{
+            const audioEl = document.getElementById("{audio_id}");
+            if (!audioEl) return;
+
+            // Ensure audio element volume is normalized
+            audioEl.volume = 1.0;
+
+            const shouldAutoPlay = {str(auto_play).lower()};
+            if (shouldAutoPlay) {{
+                const playPromise = audioEl.play();
+                if (playPromise !== undefined) {{
+                    playPromise.catch(function(error) {{
+                        console.warn("Autoplay blocked by browser policy: ", error);
+                        // Browser blocked autoplay; fallback to user manual click
+                    }});
+                }}
+            }}
+        }})();
+    </script>
     """
-    st.components.v1.html(audio_html, height=0)
+    st.components.v1.html(audio_html, height=55)
 
 
-# --- Core State Management Logic ---
+# --- State Management & Curriculum Progression ---
 
-def init_session_state() -> None:
-    """Initializes all session state variables safely on first script execution.
+def initialize_session_state() -> None:
+    """Initializes default variables in Streamlit session_state safely.
 
     Args:
         None.
@@ -120,82 +142,85 @@ def init_session_state() -> None:
     Returns:
         None.
     """
-    if "initialized" in st.session_state:
-        return
+    if "is_initialized" not in st.session_state:
+        st.session_state.is_initialized = True
+        st.session_state.data = PHASE_DATA
+        st.session_state.mastery = {
+            char: 0 for phase in PHASE_DATA.values() for char in phase
+        }
+        st.session_state.current_phase = PHASE_ORDER[0]
+        st.session_state.target_char = random.choice(
+            list(PHASE_DATA[PHASE_ORDER[0]].keys())
+        )
+        st.session_state.feedback_msg = ""
+        st.session_state.feedback_type = "info"
+        st.session_state.trigger_audio = True
+        st.session_state.curriculum_finished = False
 
-    st.session_state.data = PHASE_DATA
-    st.session_state.mastery = {
-        char: 0 for phase in PHASE_DATA.values() for char in phase
-    }
-    st.session_state.current_phase = PHASE_ORDER[0]
-    st.session_state.target_char = random.choice(
-        list(PHASE_DATA[PHASE_ORDER[0]].keys())
-    )
-    st.session_state.msg = ""
-    st.session_state.play_now = True
-    st.session_state.all_complete = False
-    st.session_state.initialized = True
 
-
-def is_phase_complete(phase: str) -> bool:
-    """Checks whether every character in a phase has reached the MASTERY_GOAL.
+def check_phase_completion(phase_name: str) -> bool:
+    """Evaluates if every character in the given phase meets MASTERY_GOAL.
 
     Args:
-        phase: The phase key identifier.
+        phase_name: Name of the phase key to validate.
 
     Returns:
-        True if all characters in the phase have mastery >= MASTERY_GOAL,
-        False otherwise.
+        True if all characters in the phase are mastered, False otherwise.
     """
+    phase_characters = st.session_state.data[phase_name]
     return all(
         st.session_state.mastery[char] >= MASTERY_GOAL
-        for char in st.session_state.data[phase]
+        for char in phase_characters
     )
 
 
-def pick_random_char(phase: str, exclude: Optional[str] = None) -> str:
-    """Selects a random character from the active phase avoiding immediate repeats.
+def select_next_character(phase_name: str, exclude_char: Optional[str] = None) -> str:
+    """Selects an unmastered or randomized character avoiding direct repetition.
 
     Args:
-        phase: The current phase name.
-        exclude: A character to exclude if other candidates exist.
+        phase_name: Name of the phase.
+        exclude_char: The character that was just shown (to prevent consecutive duplicates).
 
     Returns:
-        A selected Hangul character key.
+        A selected Hangul character string.
     """
-    candidates = list(st.session_state.data[phase].keys())
-    if exclude is not None and len(candidates) > 1:
-        candidates = [c for c in candidates if c != exclude]
-    return random.choice(candidates)
+    candidates = list(st.session_state.data[phase_name].keys())
+    
+    # Filter candidates that still need mastery
+    unmastered = [c for c in candidates if st.session_state.mastery[c] < MASTERY_GOAL]
+    pool = unmastered if unmastered else candidates
+
+    if exclude_char and len(pool) > 1:
+        pool = [c for c in pool if c != exclude_char]
+
+    return random.choice(pool)
 
 
-def advance_to_next_phase() -> bool:
-    """Advances the user progression state to the next phase in sequence.
+def advance_phase() -> bool:
+    """Advances session state to the next phase index.
 
     Args:
         None.
 
     Returns:
-        True if advanced to the next phase, False if already at final phase.
+        True if successfully advanced, False if all phases are completed.
     """
-    current_index = PHASE_ORDER.index(st.session_state.current_phase)
-    next_index = current_index + 1
+    current_idx = PHASE_ORDER.index(st.session_state.current_phase)
+    next_idx = current_idx + 1
 
-    if next_index >= len(PHASE_ORDER):
+    if next_idx >= len(PHASE_ORDER):
         return False
 
-    st.session_state.current_phase = PHASE_ORDER[next_index]
-    st.session_state.target_char = pick_random_char(PHASE_ORDER[next_index])
+    st.session_state.current_phase = PHASE_ORDER[next_idx]
+    st.session_state.target_char = select_next_character(PHASE_ORDER[next_idx])
     return True
 
 
-def handle_answer() -> None:
-    """Evaluates the user's input against the active Hangul character.
-
-    Updates mastery counters, displays feedback, and manages phase transitions.
+def submit_answer_callback() -> None:
+    """Evaluates the learner's answer and updates mastery scoring.
 
     Args:
-        None. Reads from `st.session_state.user_input`.
+        None. Reads from `st.session_state.user_answer_input`.
 
     Returns:
         None.
@@ -203,36 +228,41 @@ def handle_answer() -> None:
     current_phase = st.session_state.current_phase
     target_char = st.session_state.target_char
     correct_answer = st.session_state.data[current_phase][target_char]
-    user_answer = st.session_state.user_input.strip().lower()
+    raw_input = st.session_state.get("user_answer_input", "").strip().lower()
 
-    if user_answer == correct_answer:
+    if raw_input == correct_answer:
         st.session_state.mastery[target_char] += 1
-        st.session_state.msg = "✅ 正確！"
+        st.session_state.feedback_msg = f"✅ 正確！【{target_char}】= {correct_answer}"
+        st.session_state.feedback_type = "success"
     else:
         st.session_state.mastery[target_char] = 0
-        st.session_state.msg = f"❌ 錯誤！答案是 {correct_answer}。"
+        st.session_state.feedback_msg = (
+            f"❌ 答錯了！【{target_char}】的正確拼音是：{correct_answer}（已重置熟練度）"
+        )
+        st.session_state.feedback_type = "error"
 
-    if is_phase_complete(current_phase):
-        advanced = advance_to_next_phase()
-        if advanced:
-            st.session_state.msg = (
-                f"🏆 {current_phase} 完成！已晉級至 "
-                f"{st.session_state.current_phase}"
+    if check_phase_completion(current_phase):
+        if advance_phase():
+            st.session_state.feedback_msg = (
+                f"🏆 恭喜！{current_phase} 已達標！進入下一階段：{st.session_state.current_phase}"
             )
+            st.session_state.feedback_type = "success"
         else:
-            st.session_state.all_complete = True
-            st.session_state.msg = "🎉 恭喜！所有階段皆已完成！"
+            st.session_state.curriculum_finished = True
+            st.session_state.feedback_msg = "🎉 恭喜完成韓文 40 音所有階段！"
+            st.session_state.feedback_type = "success"
     else:
-        st.session_state.target_char = pick_random_char(
-            current_phase, exclude=target_char
+        st.session_state.target_char = select_next_character(
+            current_phase, exclude_char=target_char
         )
 
-    st.session_state.user_input = ""
-    st.session_state.play_now = True
+    # Clean input box and trigger audio playback
+    st.session_state.user_answer_input = ""
+    st.session_state.trigger_audio = True
 
 
-def handle_skip() -> None:
-    """Skips the current question without resetting or mutating mastery score.
+def skip_question_callback() -> None:
+    """Skips the active character without penalizing learner mastery.
 
     Args:
         None.
@@ -240,93 +270,112 @@ def handle_skip() -> None:
     Returns:
         None.
     """
-    st.session_state.target_char = pick_random_char(
-        st.session_state.current_phase, exclude=st.session_state.target_char
+    st.session_state.target_char = select_next_character(
+        st.session_state.current_phase,
+        exclude_char=st.session_state.target_char
     )
-    st.session_state.msg = "⏭️ 已跳過，不影響熟練度。"
-    st.session_state.user_input = ""
-    st.session_state.play_now = True
+    st.session_state.feedback_msg = "⏭️ 已跳過當前題目，熟練度不受影響。"
+    st.session_state.feedback_type = "info"
+    st.session_state.user_answer_input = ""
+    st.session_state.trigger_audio = True
 
 
-# --- UI View Rendering Layer ---
+# --- View Presentation Layer ---
 
-def render_completion_screen() -> None:
-    """Renders the final completion screen when all characters are mastered.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
+def render_completion_view() -> None:
+    """Renders the final congratulatory screen upon curriculum completion."""
     st.balloons()
-    st.success("🎉 恭喜你！40 音全部階段皆已達成熟練度！")
-    st.write("你可以重新整理頁面以重新開始練習。")
+    st.success("🎉 太棒了！您已經完全掌握韓文 40 音所有字元發音！")
+    if st.button("🔄 重新開始練習", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
 
 
-def render_practice_screen() -> None:
-    """Renders the interactive question, progress bar, audio, and input field.
+def render_practice_view() -> None:
+    """Renders active training user interface and input forms."""
+    target_char = st.session_state.target_char
+    current_phase = st.session_state.current_phase
+    current_mastery = st.session_state.mastery[target_char]
 
-    Args:
-        None.
+    # Progress visualizer
+    stars = "★" * current_mastery + "☆" * (MASTERY_GOAL - current_mastery)
+    
+    st.markdown(f"#### 📍 當前進度：`{current_phase}`")
+    st.markdown(f"**字元熟練度：** `{stars}` (目標: {MASTERY_GOAL} 次連續正確)")
 
-    Returns:
-        None.
-    """
-    mastery_value = st.session_state.mastery[st.session_state.target_char]
-    progress_bar = "★" * mastery_value + "☆" * (MASTERY_GOAL - mastery_value)
-
-    st.caption(f"當前階段：{st.session_state.current_phase}")
-    st.write(f"當前進度：{progress_bar}")
+    # Large character display
     st.markdown(
-        f"<h1 style='text-align: center; font-size: 100px;'>"
-        f"{st.session_state.target_char}</h1>",
-        unsafe_allow_html=True,
+        f"""
+        <div style="background-color: #f8f9fa; border-radius: 12px; padding: 20px; margin: 15px 0; text-align: center; border: 1px solid #e9ecef;">
+            <span style="font-size: 96px; font-weight: bold; color: #212529; font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;">
+                {target_char}
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
-    if st.session_state.play_now:
-        render_audio_player(st.session_state.target_char)
-        st.session_state.play_now = False
+    # Audio playback element
+    render_audio_controller(
+        text=target_char,
+        auto_play=st.session_state.trigger_audio
+    )
+    st.session_state.trigger_audio = False
 
+    # Input and Action Section
     st.text_input(
-        "輸入拼音並按 Enter：", key="user_input", on_change=handle_answer
+        "請輸入羅馬拼音並按 Enter 送出：",
+        key="user_answer_input",
+        on_change=submit_answer_callback
     )
-
-    if st.session_state.msg:
-        st.info(st.session_state.msg)
-
-
-def main() -> None:
-    """Main application entry point.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    st.set_page_config(page_title="韓文 40 音：穩定音訊版", layout="centered")
-    init_session_state()
-
-    st.title("🔊 韓文 40 音練習系統")
-
-    with st.expander("🔇 還是沒聲音？請檢查這裡"):
-        st.write("1. **實體靜音鍵**：請確認 iPhone 左側開關沒有露出紅色。")
-        st.write("2. **控制中心**：請將『媒體音量』調大（不是鈴聲聲量）。")
-        st.write("3. **瀏覽器權限**：iOS 預設會阻擋自動播放，請務必先點擊下方的『啟動聲音』按鈕。")
-
-    if st.session_state.all_complete:
-        render_completion_screen()
-        return
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🚀 啟動/重播聲音", use_container_width=True):
-            st.session_state.play_now = True
+        if st.button("🔊 再次播放發音", use_container_width=True):
+            st.session_state.trigger_audio = True
+            st.rerun()
     with col2:
-        st.button("⏭️ 跳過此題", use_container_width=True, on_click=handle_skip)
+        st.button("⏭️ 跳過此題", on_click=skip_question_callback, use_container_width=True)
 
-    render_practice_screen()
+    # Feedback Notification
+    if st.session_state.feedback_msg:
+        if st.session_state.feedback_type == "success":
+            st.success(st.session_state.feedback_msg)
+        elif st.session_state.feedback_type == "error":
+            st.error(st.session_state.feedback_msg)
+        else:
+            st.info(st.session_state.feedback_msg)
+
+
+def main() -> None:
+    """Application entry point configuring page layout and rendering lifecycle."""
+    st.set_page_config(
+        page_title="韓文 40 音發音即時測驗系統",
+        page_icon="🔊",
+        layout="centered"
+    )
+
+    initialize_session_state()
+
+    st.title("🔊 韓文 40 音發音訓練系統")
+
+    with st.expander("🛠️ 發音無法播放？聲音排查指南", expanded=False):
+        st.markdown(
+            """
+            - **iOS / iPhone 裝置**：
+              1. 請確認左側 **實體靜音切換鍵** 未撥至靜音（未露出橘紅色標記）。
+              2. 請確認「控制中心」之 **媒體音量** 已調大（非僅通話鈴聲）。
+              3. Safari 預設禁止網頁無互動自動播放，請直接點擊音訊播放列的 **Play 按鈕**。
+            - **桌面版 Chrome / Edge / Safari**：
+              1. 瀏覽器若禁止自動發音，請點擊畫面中的 **「🔊 再次播放發音」** 授權音訊權限。
+              2. 檢查分頁標籤是否被瀏覽器設定為「靜音網站」。
+            """
+        )
+
+    if st.session_state.curriculum_finished:
+        render_completion_view()
+    else:
+        render_practice_view()
 
 
 if __name__ == "__main__":
