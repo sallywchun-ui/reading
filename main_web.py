@@ -1,10 +1,11 @@
-"""Korean 40-Sound and Vocabulary Trainer built with Streamlit.
+"""Korean 40-Sound and Vocabulary Trainer with Multi-dimensional Quiz Modes.
 
 This module provides an interactive web-based trainer for learning the 40
-Korean Hangul characters (vowels, consonants, tense/aspirated sounds, compounds)
-and progressing into Phase 4: foundational vocabulary words. It features
-real-time audio synthesis via gTTS, dynamic romanization grading, and
-mastery-based progression.
+Korean Hangul characters and Phase 4 vocabulary. It supports three learning
+dimensions:
+1. Standard Romanization Typing (Look at Hangul -> Type Romanization)
+2. Listen & Type (Listen to audio -> Type Hangul character)
+3. Multiple Choice (Look at Hangul -> Select correct Chinese meaning)
 
 Typical usage example:
     streamlit run main_web.py
@@ -13,10 +14,11 @@ Typical usage example:
 from __future__ import annotations
 
 import base64
+import enum
 import io
 import logging
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Final, List, Optional
 
 import streamlit as st
@@ -34,18 +36,24 @@ logger = logging.getLogger(__name__)
 MASTERY_GOAL: Final[int] = 3
 
 
-# --- Domain Data Entities ---
+# --- Domain Enums & Entities ---
+
+class ExerciseMode(str, enum.Enum):
+    """Enumeration of available training dimensions."""
+    ROMAJA_INPUT = "看字拼音 (Type Romanization)"
+    LISTEN_AND_TYPE = "聽音辨字 (Listen & Type Hangul)"
+    MULTIPLE_CHOICE = "看字選義 (Multiple Choice: Meaning)"
+
 
 @dataclass(frozen=True)
 class StudyItem:
     """Represents a single learning unit (character or vocabulary word).
 
     Attributes:
-        prompt: The Hangul character or word displayed to the user.
-        romanization: The standard romanized answer required for input.
-        meaning: Optional translation or semantic meaning (used for Phase 4 words).
+        prompt: The Hangul character or word.
+        romanization: Standard Romanized transcription.
+        meaning: Optional Chinese translation.
     """
-
     prompt: str
     romanization: str
     meaning: Optional[str] = None
@@ -56,10 +64,9 @@ class Phase:
     """Represents a discrete curriculum stage containing study items.
 
     Attributes:
-        name: The display name of the learning phase.
-        items: List of StudyItem objects contained within this phase.
+        name: Display name of the phase.
+        items: List of StudyItem objects contained in this phase.
     """
-
     name: str
     items: List[StudyItem]
 
@@ -75,56 +82,56 @@ CURRICULUM: Final[List[Phase]] = [
     Phase(
         name="Phase 1: 基礎音 (Basic Vowels & Consonants)",
         items=[
-            StudyItem(prompt="ㅏ", romanization="a"),
-            StudyItem(prompt="ㅓ", romanization="eo"),
-            StudyItem(prompt="ㅗ", romanization="o"),
-            StudyItem(prompt="ㅜ", romanization="u"),
-            StudyItem(prompt="ㅡ", romanization="eu"),
-            StudyItem(prompt="ㅣ", romanization="i"),
-            StudyItem(prompt="ㄱ", romanization="g"),
-            StudyItem(prompt="ㄴ", romanization="n"),
-            StudyItem(prompt="ㄷ", romanization="d"),
-            StudyItem(prompt="ㄹ", romanization="r"),
-            StudyItem(prompt="ㅁ", romanization="m"),
-            StudyItem(prompt="ㅂ", romanization="b"),
-            StudyItem(prompt="ㅅ", romanization="s"),
-            StudyItem(prompt="ㅇ", romanization="ng"),
-            StudyItem(prompt="ㅈ", romanization="j"),
-            StudyItem(prompt="ㅎ", romanization="h"),
+            StudyItem(prompt="ㅏ", romanization="a", meaning="母音 a"),
+            StudyItem(prompt="ㅓ", romanization="eo", meaning="母音 eo"),
+            StudyItem(prompt="ㅗ", romanization="o", meaning="母音 o"),
+            StudyItem(prompt="ㅜ", romanization="u", meaning="母音 u"),
+            StudyItem(prompt="ㅡ", romanization="eu", meaning="母音 eu"),
+            StudyItem(prompt="ㅣ", romanization="i", meaning="母音 i"),
+            StudyItem(prompt="ㄱ", romanization="g", meaning="子音 g/k"),
+            StudyItem(prompt="ㄴ", romanization="n", meaning="子音 n"),
+            StudyItem(prompt="ㄷ", romanization="d", meaning="子音 d/t"),
+            StudyItem(prompt="ㄹ", romanization="r", meaning="子音 r/l"),
+            StudyItem(prompt="ㅁ", romanization="m", meaning="子音 m"),
+            StudyItem(prompt="ㅂ", romanization="b", meaning="子音 b/p"),
+            StudyItem(prompt="ㅅ", romanization="s", meaning="子音 s"),
+            StudyItem(prompt="ㅇ", romanization="ng", meaning="子音 silent/ng"),
+            StudyItem(prompt="ㅈ", romanization="j", meaning="子音 j/ch"),
+            StudyItem(prompt="ㅎ", romanization="h", meaning="子音 h"),
         ],
     ),
     Phase(
         name="Phase 2: 衍生/激音/雙子音 (Derived, Aspirated & Tense)",
         items=[
-            StudyItem(prompt="ㅑ", romanization="ya"),
-            StudyItem(prompt="ㅕ", romanization="yeo"),
-            StudyItem(prompt="ㅛ", romanization="yo"),
-            StudyItem(prompt="ㅠ", romanization="yu"),
-            StudyItem(prompt="ㅋ", romanization="k"),
-            StudyItem(prompt="ㅌ", romanization="t"),
-            StudyItem(prompt="ㅍ", romanization="p"),
-            StudyItem(prompt="ㅊ", romanization="ch"),
-            StudyItem(prompt="ㄲ", romanization="kk"),
-            StudyItem(prompt="ㄸ", romanization="tt"),
-            StudyItem(prompt="ㅃ", romanization="pp"),
-            StudyItem(prompt="ㅆ", romanization="ss"),
-            StudyItem(prompt="ㅉ", romanization="jj"),
+            StudyItem(prompt="ㅑ", romanization="ya", meaning="母音 ya"),
+            StudyItem(prompt="ㅕ", romanization="yeo", meaning="母音 yeo"),
+            StudyItem(prompt="ㅛ", romanization="yo", meaning="母音 yo"),
+            StudyItem(prompt="ㅠ", romanization="yu", meaning="母音 yu"),
+            StudyItem(prompt="ㅋ", romanization="k", meaning="激音 k"),
+            StudyItem(prompt="ㅌ", romanization="t", meaning="激音 t"),
+            StudyItem(prompt="ㅍ", romanization="p", meaning="激音 p"),
+            StudyItem(prompt="ㅊ", romanization="ch", meaning="激音 ch"),
+            StudyItem(prompt="ㄲ", romanization="kk", meaning="雙子音 kk"),
+            StudyItem(prompt="ㄸ", romanization="tt", meaning="雙子音 tt"),
+            StudyItem(prompt="ㅃ", romanization="pp", meaning="雙子音 pp"),
+            StudyItem(prompt="ㅆ", romanization="ss", meaning="雙子音 ss"),
+            StudyItem(prompt="ㅉ", romanization="jj", meaning="雙子音 jj"),
         ],
     ),
     Phase(
         name="Phase 3: 複合母音 (Compound Vowels)",
         items=[
-            StudyItem(prompt="ㅐ", romanization="ae"),
-            StudyItem(prompt="ㅒ", romanization="yae"),
-            StudyItem(prompt="ㅔ", romanization="e"),
-            StudyItem(prompt="ㅖ", romanization="ye"),
-            StudyItem(prompt="ㅘ", romanization="wa"),
-            StudyItem(prompt="ㅙ", romanization="wae"),
-            StudyItem(prompt="ㅚ", romanization="oe"),
-            StudyItem(prompt="ㅝ", romanization="wo"),
-            StudyItem(prompt="ㅞ", romanization="we"),
-            StudyItem(prompt="ㅟ", romanization="wi"),
-            StudyItem(prompt="ㅢ", romanization="ui"),
+            StudyItem(prompt="ㅐ", romanization="ae", meaning="複合母音 ae"),
+            StudyItem(prompt="ㅒ", romanization="yae", meaning="複合母音 yae"),
+            StudyItem(prompt="ㅔ", romanization="e", meaning="複合母音 e"),
+            StudyItem(prompt="ㅖ", romanization="ye", meaning="複合母音 ye"),
+            StudyItem(prompt="ㅘ", romanization="wa", meaning="複合母音 wa"),
+            StudyItem(prompt="ㅙ", romanization="wae", meaning="複合母音 wae"),
+            StudyItem(prompt="ㅚ", romanization="oe", meaning="複合母音 oe"),
+            StudyItem(prompt="ㅝ", romanization="wo", meaning="複合母音 wo"),
+            StudyItem(prompt="ㅞ", romanization="we", meaning="複合母音 we"),
+            StudyItem(prompt="ㅟ", romanization="wi", meaning="複合母音 wi"),
+            StudyItem(prompt="ㅢ", romanization="ui", meaning="複合母音 ui"),
         ],
     ),
     Phase(
@@ -134,7 +141,7 @@ CURRICULUM: Final[List[Phase]] = [
             StudyItem(prompt="우유", romanization="uyu", meaning="牛奶"),
             StudyItem(prompt="고기", romanization="gogi", meaning="肉"),
             StudyItem(prompt="사자", romanization="saja", meaning="獅子"),
-            StudyItem(prompt="바다", romanization="bada", meaning="大海"),
+            StudyItem(prompt="바达", romanization="bada", meaning="大海"),
             StudyItem(prompt="오이", romanization="oi", meaning="小黃瓜"),
             StudyItem(prompt="모자", romanization="moja", meaning="帽子"),
             StudyItem(prompt="치마", romanization="chima", meaning="裙子"),
@@ -151,20 +158,17 @@ CURRICULUM: Final[List[Phase]] = [
 ]
 
 
-# --- Text-to-Speech Service ---
+# --- Text-to-Speech Engine ---
 
 @st.cache_data(show_spinner=False, ttl=None)
 def get_tts_audio_bytes(text: str) -> Optional[bytes]:
-    """Synthesizes Korean audio using gTTS and caches the byte content.
+    """Synthesizes Korean audio using gTTS with caching.
 
     Args:
-        text: The Korean character or word string to synthesize.
+        text: The Korean text to speak.
 
     Returns:
-        Raw MP3 bytes on success, or None if network/API failure occurs.
-
-    Raises:
-        None. Errors are captured and logged internally.
+        MP3 audio bytes on success, or None on failure.
     """
     try:
         buffer = io.BytesIO()
@@ -172,26 +176,26 @@ def get_tts_audio_bytes(text: str) -> Optional[bytes]:
         tts.write_to_fp(buffer)
         return buffer.getvalue()
     except gTTSError as exc:
-        logger.error("gTTS API exception for text '%s': %s", text, exc)
+        logger.error("gTTS API error for text '%s': %s", text, exc)
         return None
     except (ConnectionError, OSError, TimeoutError) as exc:
-        logger.error("Network connection error synthesizing '%s': %s", text, exc)
+        logger.error("Network error during TTS generation for '%s': %s", text, exc)
         return None
 
 
 def render_audio_controller(text: str, auto_play: bool = True) -> None:
-    """Renders an HTML5 audio element with an automatic playback script.
+    """Renders HTML5 audio element with automatic play fallback.
 
     Args:
-        text: Korean prompt text to synthesize.
-        auto_play: Flag indicating whether programmatic playback is requested.
+        text: The Korean character or word to pronounce.
+        auto_play: Whether to trigger automatic playback via JS.
 
     Returns:
         None.
     """
     audio_bytes = get_tts_audio_bytes(text)
     if audio_bytes is None:
-        st.warning("⚠️ 語音服務連線異常，請先手動輸入拼音練習。")
+        st.warning("⚠️ 語音服務暫時無法連線。")
         return
 
     encoded_audio = base64.b64encode(audio_bytes).decode("utf-8")
@@ -214,7 +218,7 @@ def render_audio_controller(text: str, auto_play: bool = True) -> None:
                 const promise = audioEl.play();
                 if (promise !== undefined) {{
                     promise.catch(function(err) {{
-                        console.warn("Autoplay was prevented by browser security policy: ", err);
+                        console.warn("Autoplay blocked: ", err);
                     }});
                 }}
             }}
@@ -224,20 +228,21 @@ def render_audio_controller(text: str, auto_play: bool = True) -> None:
     st.components.v1.html(audio_html, height=52)
 
 
-# --- Core Engine & State Management ---
+# --- Core Progression and Domain Engine ---
 
 class TrainerEngine:
-    """Manages progression logic, mastery mapping, and item selection."""
+    """Encapsulates test grading, question generation, and progression logic."""
 
     @staticmethod
     def initialize_state() -> None:
-        """Initializes Streamlit session_state with schema keys."""
+        """Initializes session state keys."""
         if "trainer_initialized" in st.session_state:
             return
 
         st.session_state.trainer_initialized = True
         st.session_state.current_phase_idx = 0
-        
+        st.session_state.active_mode = ExerciseMode.ROMAJA_INPUT.value
+
         # Build mastery map for all items across all phases
         mastery_map: Dict[str, int] = {}
         for phase in CURRICULUM:
@@ -251,23 +256,24 @@ class TrainerEngine:
         st.session_state.feedback_type = "info"
         st.session_state.trigger_audio = True
         st.session_state.curriculum_complete = False
+        st.session_state.choice_options = []
 
     @classmethod
     def get_current_phase(cls) -> Phase:
-        """Retrieves the active Phase instance."""
+        """Retrieves active Phase."""
         idx = st.session_state.current_phase_idx
         return CURRICULUM[idx]
 
     @classmethod
     def get_active_item(cls) -> StudyItem:
-        """Retrieves the currently targeted StudyItem."""
+        """Retrieves currently targeted StudyItem."""
         phase = cls.get_current_phase()
         prompt = st.session_state.target_prompt
         return phase.item_map[prompt]
 
     @classmethod
     def is_phase_mastered(cls, phase: Phase) -> bool:
-        """Checks if all items in a phase have reached the mastery goal."""
+        """Checks whether all items in phase have reached the mastery goal."""
         return all(
             st.session_state.mastery_map[item.prompt] >= MASTERY_GOAL
             for item in phase.items
@@ -275,15 +281,7 @@ class TrainerEngine:
 
     @classmethod
     def pick_next_prompt(cls, phase: Phase, exclude_prompt: Optional[str] = None) -> str:
-        """Picks the next prompt prioritizing unmastered items.
-
-        Args:
-            phase: Current active Phase.
-            exclude_prompt: Prompt string to avoid repeating immediately.
-
-        Returns:
-            A prompt string representing the chosen item.
-        """
+        """Selects next prompt prioritizing unmastered items."""
         unmastered = [
             item.prompt
             for item in phase.items
@@ -297,41 +295,80 @@ class TrainerEngine:
         return random.choice(pool)
 
     @classmethod
+    def generate_choice_options(cls, active_item: StudyItem, phase: Phase) -> List[str]:
+        """Generates 4 unique choices for multiple choice mode."""
+        correct_meaning = active_item.meaning or active_item.romanization
+        other_items = [item for item in phase.items if item.prompt != active_item.prompt]
+        
+        # Sample 3 distractors
+        num_distractors = min(3, len(other_items))
+        sampled = random.sample(other_items, num_distractors)
+        distractor_meanings = [item.meaning or item.romanization for item in sampled]
+        
+        options = [correct_meaning] + distractor_meanings
+        random.shuffle(options)
+        return options
+
+    @classmethod
     def advance_phase_or_finish(cls) -> None:
-        """Advances the phase index or flags full completion."""
+        """Advances to the next phase or marks curriculum completion."""
         next_idx = st.session_state.current_phase_idx + 1
         if next_idx >= len(CURRICULUM):
             st.session_state.curriculum_complete = True
-            st.session_state.feedback_msg = "🎉 恭喜！您已成功完成包含基礎單字在內的所有階段！"
+            st.session_state.feedback_msg = "🎉 恭喜！您已成功通過全階段測驗！"
             st.session_state.feedback_type = "success"
         else:
             st.session_state.current_phase_idx = next_idx
             new_phase = CURRICULUM[next_idx]
             st.session_state.target_prompt = cls.pick_next_prompt(new_phase)
-            st.session_state.feedback_msg = (
-                f"🏆 晉級成功！進入【{new_phase.name}】"
-            )
+            st.session_state.feedback_msg = f"🏆 晉級成功！進入【{new_phase.name}】"
             st.session_state.feedback_type = "success"
+            # Refresh choice options for new item
+            st.session_state.choice_options = cls.generate_choice_options(
+                cls.get_active_item(), new_phase
+            )
 
     @classmethod
-    def process_answer(cls) -> None:
-        """Evaluates the submitted answer against the target prompt."""
+    def evaluate_submission(cls, submitted_answer: str) -> None:
+        """Evaluates submitted answer against the expected response for active mode.
+
+        Args:
+            submitted_answer: Raw string submitted by text input or choice button.
+
+        Returns:
+            None. Mutates st.session_state.
+        """
         active_item = cls.get_active_item()
-        raw_input = st.session_state.get("user_text_input", "").strip().lower()
-        correct_answer = active_item.romanization.strip().lower()
+        mode = st.session_state.active_mode
+        user_ans = submitted_answer.strip()
 
-        meaning_hint = f"（{active_item.meaning}）" if active_item.meaning else ""
+        # Determine expected answer and match logic based on active mode
+        if mode == ExerciseMode.ROMAJA_INPUT.value:
+            is_correct = (user_ans.lower() == active_item.romanization.strip().lower())
+            expected_display = active_item.romanization
+        elif mode == ExerciseMode.LISTEN_AND_TYPE.value:
+            is_correct = (user_ans == active_item.prompt.strip())
+            expected_display = active_item.prompt
+        elif mode == ExerciseMode.MULTIPLE_CHOICE.value:
+            expected_meaning = active_item.meaning or active_item.romanization
+            is_correct = (user_ans == expected_meaning)
+            expected_display = expected_meaning
+        else:
+            is_correct = False
+            expected_display = ""
 
-        if raw_input == correct_answer:
+        meaning_text = f"（{active_item.meaning}）" if active_item.meaning else ""
+
+        if is_correct:
             st.session_state.mastery_map[active_item.prompt] += 1
             st.session_state.feedback_msg = (
-                f"✅ 正確！【{active_item.prompt}】= {active_item.romanization} {meaning_hint}"
+                f"✅ 正確！【{active_item.prompt}】= {active_item.romanization} {meaning_text}"
             )
             st.session_state.feedback_type = "success"
         else:
             st.session_state.mastery_map[active_item.prompt] = 0
             st.session_state.feedback_msg = (
-                f"❌ 答錯了！【{active_item.prompt}】正確拼音為：{active_item.romanization} {meaning_hint}（熟練度已重置）"
+                f"❌ 錯誤！正確答案為：{expected_display}（字元：{active_item.prompt}，熟練度已重置）"
             )
             st.session_state.feedback_type = "error"
 
@@ -342,13 +379,17 @@ class TrainerEngine:
             st.session_state.target_prompt = cls.pick_next_prompt(
                 current_phase, exclude_prompt=active_item.prompt
             )
+            # Update options for next question
+            st.session_state.choice_options = cls.generate_choice_options(
+                cls.get_active_item(), current_phase
+            )
 
         st.session_state.user_text_input = ""
         st.session_state.trigger_audio = True
 
     @classmethod
     def skip_current_item(cls) -> None:
-        """Skips active prompt without mutating mastery counters."""
+        """Skips the active item without penalizing mastery score."""
         current_phase = cls.get_current_phase()
         current_prompt = st.session_state.target_prompt
         st.session_state.target_prompt = cls.pick_next_prompt(
@@ -358,71 +399,105 @@ class TrainerEngine:
         st.session_state.feedback_type = "info"
         st.session_state.user_text_input = ""
         st.session_state.trigger_audio = True
+        st.session_state.choice_options = cls.generate_choice_options(
+            cls.get_active_item(), current_phase
+        )
 
 
 # --- View Presentation Layer ---
 
 def render_completion_view() -> None:
-    """Renders the comprehensive congratulation screen."""
+    """Renders final congratulatory interface."""
     st.balloons()
-    st.success("🏆 恭喜您！韓文 40 音全體發音與 Phase 4 基礎單字測驗已全數達標！")
-    if st.button("🔄 重新開始完整課程", use_container_width=True):
+    st.success("🏆 恭喜！您已成功在多維度測驗模式下完成所有階段！")
+    if st.button("🔄 重新開始完整練習", use_container_width=True):
         st.session_state.clear()
         st.rerun()
 
 
 def render_practice_view() -> None:
-    """Renders the interactive question panel and controls."""
+    """Renders active question display, audio playback, and dynamic inputs."""
     current_phase = TrainerEngine.get_current_phase()
     active_item = TrainerEngine.get_active_item()
     mastery_score = st.session_state.mastery_map[active_item.prompt]
+    mode = st.session_state.active_mode
 
-    # Progress Indicators
+    # Ensure choice options exist
+    if not st.session_state.choice_options:
+        st.session_state.choice_options = TrainerEngine.generate_choice_options(
+            active_item, current_phase
+        )
+
+    # Progress and Mode Selector
     stars = "★" * mastery_score + "☆" * (MASTERY_GOAL - mastery_score)
-    st.markdown(f"#### 📍 當前進度：`{current_phase.name}`")
-    st.markdown(f"**項目熟練度：** `{stars}` (目標: 連續 {MASTERY_GOAL} 次正確)")
+    st.markdown(f"#### 📍 當前階段：`{current_phase.name}`")
+    st.markdown(f"**熟練度：** `{stars}` (目標: 連續 {MASTERY_GOAL} 次正確)")
 
-    # Dynamic Font Size Adjustments for Multi-syllable Words
-    is_word = len(active_item.prompt) > 1
-    font_size_px = 72 if is_word else 100
-
-    # Meaning container for Phase 4 vocabulary
-    meaning_html = (
-        f"<div style='font-size: 20px; color: #6c757d; margin-top: 8px;'>中文意義：<b>{active_item.meaning}</b></div>"
-        if active_item.meaning
-        else ""
-    )
+    # Prompt Card Rendering
+    if mode == ExerciseMode.LISTEN_AND_TYPE.value:
+        display_html = """
+        <div style="font-size: 64px; color: #adb5bd; font-weight: bold;">
+            🎧 請聽音辨字
+        </div>
+        <div style="font-size: 16px; color: #6c757d; margin-top: 8px;">
+            (字元已隱藏，請輸入聽到的韓文字)
+        </div>
+        """
+    else:
+        is_word = len(active_item.prompt) > 1
+        font_size_px = 72 if is_word else 100
+        display_html = f"""
+        <div style="font-size: {font_size_px}px; font-weight: bold; color: #1e293b; font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;">
+            {active_item.prompt}
+        </div>
+        """
 
     st.markdown(
         f"""
         <div style="background-color: #ffffff; border-radius: 12px; padding: 24px; margin: 16px 0; text-align: center; border: 2px solid #e9ecef; box-shadow: 0 4px 6px rgba(0,0,0,0.04);">
-            <div style="font-size: {font_size_px}px; font-weight: bold; color: #1e293b; font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;">
-                {active_item.prompt}
-            </div>
-            {meaning_html}
+            {display_html}
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # Audio Playback
+    # Audio Engine
     render_audio_controller(
         text=active_item.prompt,
         auto_play=st.session_state.trigger_audio
     )
     st.session_state.trigger_audio = False
 
-    # Form Submission Input
-    st.text_input(
-        "請輸入羅馬拼音並按 Enter 送出：",
-        key="user_text_input",
-        on_change=TrainerEngine.process_answer
-    )
+    # Dynamic Input Form Dispatch
+    if mode == ExerciseMode.ROMAJA_INPUT.value:
+        st.text_input(
+            "請輸入羅馬拼音並按 Enter：",
+            key="user_text_input",
+            on_change=lambda: TrainerEngine.evaluate_submission(st.session_state.user_text_input)
+        )
+    elif mode == ExerciseMode.LISTEN_AND_TYPE.value:
+        st.text_input(
+            "請輸入聽到的韓文字（Hangul）並按 Enter：",
+            key="user_text_input",
+            on_change=lambda: TrainerEngine.evaluate_submission(st.session_state.user_text_input)
+        )
+    elif mode == ExerciseMode.MULTIPLE_CHOICE.value:
+        st.markdown("**請選擇正確的中文意義或發音：**")
+        cols = st.columns(2)
+        for idx, option in enumerate(st.session_state.choice_options):
+            col_target = cols[idx % 2]
+            if col_target.button(
+                f"{idx + 1}. {option}",
+                key=f"choice_btn_{idx}_{option}",
+                use_container_width=True
+            ):
+                TrainerEngine.evaluate_submission(option)
+                st.rerun()
 
-    # Secondary Action Buttons
+    # Action Controls
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🔊 重新播放發音", use_container_width=True):
+        if st.button("🔊 重播語音", use_container_width=True):
             st.session_state.trigger_audio = True
             st.rerun()
     with col2:
@@ -432,7 +507,7 @@ def render_practice_view() -> None:
             use_container_width=True
         )
 
-    # Notification Message Banner
+    # Feedback Alerts
     if st.session_state.feedback_msg:
         if st.session_state.feedback_type == "success":
             st.success(st.session_state.feedback_msg)
@@ -445,26 +520,40 @@ def render_practice_view() -> None:
 def main() -> None:
     """Application entry point."""
     st.set_page_config(
-        page_title="韓文 40 音與基礎單字訓練系統",
+        page_title="韓文 40 音與單字多維度測驗系統",
         page_icon="🇰🇷",
         layout="centered"
     )
 
     TrainerEngine.initialize_state()
 
-    st.title("🇰🇷 韓文 40 音 ＆ 基礎單字訓練系統")
+    st.title("🇰🇷 韓文 40 音多維度測驗系統")
 
-    with st.expander("ℹ️ 課程說明與聲音故障排查", expanded=False):
+    # Mode Selector
+    modes = [m.value for m in ExerciseMode]
+    current_mode_idx = modes.index(st.session_state.active_mode)
+    selected_mode = st.selectbox(
+        "🎯 選擇測驗維度：",
+        options=modes,
+        index=current_mode_idx
+    )
+    if selected_mode != st.session_state.active_mode:
+        st.session_state.active_mode = selected_mode
+        st.session_state.choice_options = TrainerEngine.generate_choice_options(
+            TrainerEngine.get_active_item(),
+            TrainerEngine.get_current_phase()
+        )
+        st.rerun()
+
+    with st.expander("ℹ️ 題型說明與聲音故障排查", expanded=False):
         st.markdown(
             """
-            - **課程階段規劃**：
-              1. **Phase 1**：單母音與基礎子音（共 16 音）
-              2. **Phase 2**：衍生母音、激音與雙子音（共 13 音）
-              3. **Phase 3**：複合母音（共 11 音）
-              4. **Phase 4**：基礎實用單字（共 16 組核心詞彙）
+            - **三大測驗維度**：
+              1. **看字拼音**：依據畫面的韓文字母/單字輸入對應的羅馬拼音。
+              2. **聽音辨字**：隱藏字形，僅透過語音播放，直接在鍵盤輸入對應的韓文字（Hangul）。
+              3. **看字選義**：適合單字與音標記憶，提供 4 選 1 中文語義選擇題。
             - **發音無聲排查**：
-              1. 行動裝置（如 iPhone）請關閉左側**實體靜音開關**並調大媒體音量。
-              2. 若瀏覽器自動播放被阻擋，可直接點擊發音控制列上的播放鈕。
+              - 行動裝置請關閉實體靜音開關並調高媒體音量。
             """
         )
 
