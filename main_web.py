@@ -15,66 +15,61 @@ import base64
 import io
 import logging
 import random
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import streamlit as st
 from gtts import gTTS
 from gtts.tts import gTTSError
 
-# --- Module-level logger (visible in the terminal running `streamlit run`) ---
+# Module-level logger setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Constants ---
+# --- Application Configuration and Data ---
+# Number of consecutive correct answers required to master a character.
 MASTERY_GOAL: int = 3
-"""int: Number of consecutive correct answers required to master a character."""
 
+# Immutable source-of-truth for all 40 Hangul learning phases.
 PHASE_DATA: Dict[str, Dict[str, str]] = {
-    "Phase 1: 單母音/子音": {
+    "Phase 1: 基礎音 (Basic Vowels & Consonants)": {
         "ㅏ": "a", "ㅓ": "eo", "ㅗ": "o", "ㅜ": "u", "ㅡ": "eu", "ㅣ": "i",
         "ㄱ": "g", "ㄴ": "n", "ㄷ": "d", "ㄹ": "r", "ㅁ": "m", "ㅂ": "b",
+        "ㅅ": "s", "ㅇ": "ng", "ㅈ": "j", "ㅎ": "h"
     },
-    "Phase 2: 激音/雙子音": {
-        "ㅋ": "k", "ㅌ": "t", "ㅍ": "p", "ㅊ": "ch", "ㅎ": "h",
-        "ㄲ": "kk", "ㄸ": "tt", "ㅃ": "pp", "ㅆ": "ss", "ㅉ": "jj",
+    "Phase 2: 衍生/激音/雙子音 (Derived, Aspirated & Tense)": {
+        "ㅑ": "ya", "ㅕ": "yeo", "ㅛ": "yo", "ㅠ": "yu",
+        "ㅋ": "k", "ㅌ": "t", "ㅍ": "p", "ㅊ": "ch",
+        "ㄲ": "kk", "ㄸ": "tt", "ㅃ": "pp", "ㅆ": "ss", "ㅉ": "jj"
     },
-    "Phase 3: 複合母音": {
+    "Phase 3: 複合母音 (Compound Vowels)": {
         "ㅐ": "ae", "ㅒ": "yae", "ㅔ": "e", "ㅖ": "ye", "ㅘ": "wa",
-        "ㅙ": "wae", "ㅚ": "oe", "ㅝ": "wo", "ㅞ": "we", "ㅟ": "wi", "ㅢ": "ui",
+        "ㅙ": "wae", "ㅚ": "oe", "ㅝ": "wo", "ㅞ": "we", "ㅟ": "wi", "ㅢ": "ui"
     },
 }
-"""Dict[str, Dict[str, str]]: Immutable source-of-truth for all learning phases.
 
-Each outer key is a phase name; each inner dict maps a Hangul character to its
-romanized pronunciation.
-"""
-
+# Fixed traversal order of phases derived from PHASE_DATA.
 PHASE_ORDER: List[str] = list(PHASE_DATA.keys())
-"""List[str]: Fixed traversal order of phases, derived once from PHASE_DATA."""
 
 
-# --- Text-to-Speech layer ---------------------------------------------------
+# --- Text-to-Speech Service ---
 
 @st.cache_data(show_spinner=False, ttl=None)
 def get_tts_audio_bytes(text: str) -> Optional[bytes]:
     """Generates Korean speech audio bytes for a given character via gTTS.
 
     Results are cached per unique `text` value for the lifetime of the
-    Streamlit process, so repeated playback of the same character never
-    triggers a duplicate network call.
+    Streamlit process, eliminating redundant outbound network calls.
 
     Args:
-        text: The Korean text (typically a single Hangul jamo) to synthesize.
+        text: The Korean Hangul character or string to synthesize.
 
     Returns:
         The raw MP3 audio bytes on success, or None if speech synthesis
-        failed for any reason (network error, service error, etc.). Callers
-        must handle the None case gracefully instead of assuming success.
+        failed due to network or service errors.
 
     Raises:
-        This function intentionally does not raise; all known failure modes
-        are caught internally and logged, returning None instead. This keeps
-        the calling UI code free of try/except boilerplate.
+        None. All internal exceptions are logged and caught gracefully.
     """
     try:
         buffer = io.BytesIO()
@@ -92,21 +87,17 @@ def get_tts_audio_bytes(text: str) -> Optional[bytes]:
 def render_audio_player(text: str) -> None:
     """Renders an autoplaying, hidden HTML5 audio element for the given text.
 
-    Fetches (or reuses cached) TTS audio for `text` and embeds it as a
-    Base64 data URI, avoiding any client-side network dependency on external
-    TTS endpoints. If synthesis fails, shows a non-blocking warning instead
-    of silently producing no sound.
+    Fetches cached TTS audio for `text` and embeds it as a Base64 data URI.
 
     Args:
         text: The Korean text to speak aloud.
 
     Returns:
-        None. Renders directly into the current Streamlit app via
-        `st.components.v1.html` or `st.warning`.
+        None.
     """
     audio_bytes = get_tts_audio_bytes(text)
     if audio_bytes is None:
-        st.warning("⚠️ 語音服務暫時無法使用，請先靠自己的記憶作答，稍後會自動重試。")
+        st.warning("⚠️ 語音服務暫時無法使用，請先自行記憶發音。")
         return
 
     encoded_audio = base64.b64encode(audio_bytes).decode("utf-8")
@@ -118,19 +109,16 @@ def render_audio_player(text: str) -> None:
     st.components.v1.html(audio_html, height=0)
 
 
-# --- Session state management ------------------------------------------------
+# --- Core State Management Logic ---
 
 def init_session_state() -> None:
-    """Initializes all Streamlit session_state keys used by this app.
-
-    This is idempotent: if state already exists (e.g. on script rerun), it
-    does nothing, preserving the learner's in-progress state.
+    """Initializes all session state variables safely on first script execution.
 
     Args:
         None.
 
     Returns:
-        None. Mutates `st.session_state` in place.
+        None.
     """
     if "initialized" in st.session_state:
         return
@@ -150,10 +138,10 @@ def init_session_state() -> None:
 
 
 def is_phase_complete(phase: str) -> bool:
-    """Checks whether every character in a phase has reached MASTERY_GOAL.
+    """Checks whether every character in a phase has reached the MASTERY_GOAL.
 
     Args:
-        phase: The phase name to check, must be a key in `PHASE_DATA`.
+        phase: The phase key identifier.
 
     Returns:
         True if all characters in the phase have mastery >= MASTERY_GOAL,
@@ -166,16 +154,14 @@ def is_phase_complete(phase: str) -> bool:
 
 
 def pick_random_char(phase: str, exclude: Optional[str] = None) -> str:
-    """Picks a random character from the given phase, avoiding immediate repeats.
+    """Selects a random character from the active phase avoiding immediate repeats.
 
     Args:
-        phase: The phase name to draw a character from.
-        exclude: A character to avoid picking again if the phase has more
-            than one character available (prevents the same question
-            appearing twice in a row).
+        phase: The current phase name.
+        exclude: A character to exclude if other candidates exist.
 
     Returns:
-        A Hangul character key from `st.session_state.data[phase]`.
+        A selected Hangul character key.
     """
     candidates = list(st.session_state.data[phase].keys())
     if exclude is not None and len(candidates) > 1:
@@ -184,15 +170,13 @@ def pick_random_char(phase: str, exclude: Optional[str] = None) -> str:
 
 
 def advance_to_next_phase() -> bool:
-    """Advances the learner to the next phase in PHASE_ORDER, if any remains.
+    """Advances the user progression state to the next phase in sequence.
 
     Args:
         None.
 
     Returns:
-        True if there was a next phase and the state was advanced to it.
-        False if the current phase was already the last one (i.e. the
-        entire curriculum is complete).
+        True if advanced to the next phase, False if already at final phase.
     """
     current_index = PHASE_ORDER.index(st.session_state.current_phase)
     next_index = current_index + 1
@@ -206,17 +190,15 @@ def advance_to_next_phase() -> bool:
 
 
 def handle_answer() -> None:
-    """Callback for the answer text_input's on_change event.
+    """Evaluates the user's input against the active Hangul character.
 
-    Grades the learner's input against the current target character, updates
-    mastery, and either advances the phase (if just completed), moves to the
-    next question within the phase, or marks the whole curriculum complete.
+    Updates mastery counters, displays feedback, and manages phase transitions.
 
     Args:
-        None. Reads `st.session_state.user_input` as the raw learner input.
+        None. Reads from `st.session_state.user_input`.
 
     Returns:
-        None. Mutates `st.session_state` in place.
+        None.
     """
     current_phase = st.session_state.current_phase
     target_char = st.session_state.target_char
@@ -250,17 +232,13 @@ def handle_answer() -> None:
 
 
 def handle_skip() -> None:
-    """Callback for the '跳過此題' (skip) button.
-
-    Moves to a new question within the current phase WITHOUT judging the
-    current input and WITHOUT modifying any mastery counters. This is the
-    fix for the bug where skipping used to incorrectly zero out mastery.
+    """Skips the current question without resetting or mutating mastery score.
 
     Args:
         None.
 
     Returns:
-        None. Mutates `st.session_state` in place.
+        None.
     """
     st.session_state.target_char = pick_random_char(
         st.session_state.current_phase, exclude=st.session_state.target_char
@@ -270,10 +248,10 @@ def handle_skip() -> None:
     st.session_state.play_now = True
 
 
-# --- Page rendering -----------------------------------------------------------
+# --- UI View Rendering Layer ---
 
 def render_completion_screen() -> None:
-    """Renders the final congratulations screen once all phases are mastered.
+    """Renders the final completion screen when all characters are mastered.
 
     Args:
         None.
@@ -287,7 +265,7 @@ def render_completion_screen() -> None:
 
 
 def render_practice_screen() -> None:
-    """Renders the active practice UI: progress, character, audio, and input.
+    """Renders the interactive question, progress bar, audio, and input field.
 
     Args:
         None.
@@ -319,7 +297,7 @@ def render_practice_screen() -> None:
 
 
 def main() -> None:
-    """Application entry point: sets up the page and dispatches rendering.
+    """Main application entry point.
 
     Args:
         None.
@@ -330,7 +308,7 @@ def main() -> None:
     st.set_page_config(page_title="韓文 40 音：穩定音訊版", layout="centered")
     init_session_state()
 
-    st.title("🔊 韓文 40 音")
+    st.title("🔊 韓文 40 音練習系統")
 
     with st.expander("🔇 還是沒聲音？請檢查這裡"):
         st.write("1. **實體靜音鍵**：請確認 iPhone 左側開關沒有露出紅色。")
