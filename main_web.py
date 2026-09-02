@@ -10,6 +10,9 @@ picked from the sidebar:
      c. Multiple Choice (Look at Hangul -> Select correct Chinese meaning)
 2. 교재 학습 (세종한국어 1A) (lessons/textbook_app.py): vocabulary, grammar,
    dialogue, and quiz tabs for lessons 1-10 of the 세종한국어 1A textbook.
+3. 타자 연습 (lessons/typing_practice.py): a 두벌식 (2-beolsik) keyboard-layout
+   reference plus a short-sentence Korean typing drill with diff/accuracy/
+   speed feedback.
 
 Typical usage example:
     streamlit run main_web.py
@@ -30,6 +33,7 @@ from gtts import gTTS
 from gtts.tts import gTTSError
 
 from lessons.textbook_app import render_textbook_mode
+from lessons.typing_practice import render_typing_mode
 
 # Module-level logging setup
 logging.basicConfig(
@@ -48,6 +52,7 @@ class AppMode(str, enum.Enum):
     """Enumeration of the top-level learning modes offered in the sidebar."""
     SOUND_TRAINER = "40음 · 단어 트레이너 (40音與單字測驗)"
     TEXTBOOK_LESSONS = "교재 학습 (세종한국어 1A 教材課程)"
+    TYPING_PRACTICE = "타자 연습 (韓文打字練習)"
 
 
 class ExerciseMode(str, enum.Enum):
@@ -552,6 +557,10 @@ def main() -> None:
 
     if app_mode == AppMode.TEXTBOOK_LESSONS.value:
         render_textbook_mode()
+        return
+
+    if app_mode == AppMode.TYPING_PRACTICE.value:
+        render_typing_mode()
         return
 
     TrainerEngine.initialize_state()
