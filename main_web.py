@@ -1,11 +1,15 @@
-"""Korean 40-Sound and Vocabulary Trainer with Multi-dimensional Quiz Modes.
+"""Korean Learning App: 40-Sound Trainer + 세종한국어 1A Textbook Lessons.
 
-This module provides an interactive web-based trainer for learning the 40
-Korean Hangul characters and Phase 4 vocabulary. It supports three learning
-dimensions:
-1. Standard Romanization Typing (Look at Hangul -> Type Romanization)
-2. Listen & Type (Listen to audio -> Type Hangul character)
-3. Multiple Choice (Look at Hangul -> Select correct Chinese meaning)
+This module is the single Streamlit entry point for two learning modes,
+picked from the sidebar:
+1. 40음 · 단어 트레이너 (this module): an interactive trainer for the 40
+   Korean Hangul characters and Phase 4 vocabulary, with three learning
+   dimensions:
+     a. Standard Romanization Typing (Look at Hangul -> Type Romanization)
+     b. Listen & Type (Listen to audio -> Type Hangul character)
+     c. Multiple Choice (Look at Hangul -> Select correct Chinese meaning)
+2. 교재 학습 (세종한국어 1A) (lessons/textbook_app.py): vocabulary, grammar,
+   dialogue, and quiz tabs for lessons 1-10 of the 세종한국어 1A textbook.
 
 Typical usage example:
     streamlit run main_web.py
@@ -25,6 +29,8 @@ import streamlit as st
 from gtts import gTTS
 from gtts.tts import gTTSError
 
+from lessons.textbook_app import render_textbook_mode
+
 # Module-level logging setup
 logging.basicConfig(
     level=logging.INFO,
@@ -37,6 +43,12 @@ MASTERY_GOAL: Final[int] = 3
 
 
 # --- Domain Enums & Entities ---
+
+class AppMode(str, enum.Enum):
+    """Enumeration of the top-level learning modes offered in the sidebar."""
+    SOUND_TRAINER = "40음 · 단어 트레이너 (40音與單字測驗)"
+    TEXTBOOK_LESSONS = "교재 학습 (세종한국어 1A 教材課程)"
+
 
 class ExerciseMode(str, enum.Enum):
     """Enumeration of available training dimensions."""
@@ -518,12 +530,29 @@ def render_practice_view() -> None:
 
 
 def main() -> None:
-    """Application entry point."""
+    """Application entry point.
+
+    Renders the sidebar's top-level mode switch first, then dispatches to
+    either the textbook lesson mode (lessons.textbook_app) or the 40-sound
+    trainer implemented in the rest of this module.
+    """
     st.set_page_config(
-        page_title="韓文 40 音與單字多維度測驗系統",
+        page_title="韓文學習系統 · 40音與세종한국어 1A教材",
         page_icon="🇰🇷",
         layout="centered"
     )
+
+    st.sidebar.markdown("### 🇰🇷 韓文學習")
+    app_mode = st.sidebar.radio(
+        "학습 모드 선택 (選擇學習模式)",
+        [m.value for m in AppMode],
+        label_visibility="collapsed",
+    )
+    st.sidebar.divider()
+
+    if app_mode == AppMode.TEXTBOOK_LESSONS.value:
+        render_textbook_mode()
+        return
 
     TrainerEngine.initialize_state()
 

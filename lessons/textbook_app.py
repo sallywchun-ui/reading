@@ -1,19 +1,23 @@
 # -*- coding: utf-8 -*-
-"""
-세종한국어 1A · 제1~10과
-Streamlit 版本 — 單字 / 文法 / 課文 / 測驗（10 課切換）
+"""세종한국어 1A · 제1~10과 (Lessons 1-10) — Streamlit learning module.
 
-執行方式：
+Renders vocabulary, grammar, dialogue/reading, and quiz tabs for each of the
+first ten lessons of the 세종한국어 1A textbook. This module is designed to be
+imported by main_web.py rather than run standalone: it defines the lesson
+data (``LESSONS``, ``LESSON_ORDER``) and rendering functions, and exposes a
+single entry point, ``render_textbook_mode()``, that main_web.py calls when
+the user selects the textbook learning mode from its sidebar.
+
+This module intentionally does not call ``st.set_page_config()`` — that can
+only be called once per app, and main_web.py owns it.
+
+Standalone usage (for local development of this module only):
     pip install streamlit
-    streamlit run lessons_app.py
-
-整合進現有 main_web.py 的方式，請見檔案最下方的說明註解。
+    streamlit run lessons/textbook_app.py
 """
 
 import random
 import streamlit as st
-
-st.set_page_config(page_title="세종한국어 1A", page_icon="📘", layout="centered")
 
 # =========================================================
 # 0. 共用樣式
@@ -102,7 +106,8 @@ CUSTOM_CSS = """
   .app-footer{ text-align:center; font-size:12px; color:var(--ink-soft); margin-top:30px; }
 </style>
 """
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+# CUSTOM_CSS is injected inside render_textbook_mode(), not at import time,
+# so it only applies while the textbook mode is actually being shown.
 
 
 # =========================================================
@@ -1499,46 +1504,48 @@ def render_lesson(lid: str):
 
 
 # =========================================================
-# 4. 主畫面：課程選單
+# 4. 主畫面：課程選單（模組進入點）
 # =========================================================
 
-st.sidebar.markdown("### 📘 세종한국어 1A")
-lesson_labels = {lid: f"{lid}과 · {LESSONS[lid]['headline']}" for lid in LESSON_ORDER}
-selected = st.sidebar.radio(
-    "과 선택",
-    LESSON_ORDER,
-    format_func=lambda lid: lesson_labels[lid],
-)
+def render_textbook_mode() -> None:
+    """Renders the full 세종한국어 1A textbook-learning mode.
 
-render_lesson(selected)
+    This is the single entry point main_web.py calls after the user picks
+    the textbook mode from its sidebar. It injects this module's CSS, shows
+    the per-lesson picker, and renders the selected lesson's four tabs
+    (vocab / grammar / dialogue / quiz).
 
-st.markdown(
-    '<div class="app-footer">세종한국어 1A · 국립국어원 교재 데이터를 바탕으로 제작</div>',
-    unsafe_allow_html=True,
-)
+    Returns:
+        None.
+    """
+    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+    st.sidebar.markdown("### 📘 세종한국어 1A")
+    lesson_labels = {lid: f"{lid}과 · {LESSONS[lid]['headline']}" for lid in LESSON_ORDER}
+    selected = st.sidebar.radio(
+        "과 선택",
+        LESSON_ORDER,
+        format_func=lambda lid: lesson_labels[lid],
+    )
+
+    render_lesson(selected)
+
+    st.markdown(
+        '<div class="app-footer">세종한국어 1A · 국립국어원 교재 데이터를 바탕으로 제작</div>',
+        unsafe_allow_html=True,
+    )
 
 
-# =========================================================
-# 5. 整合到你現有 main_web.py 的方式（說明，不影響執行）
-# =========================================================
-#
-# 1) 把這個檔案存成 lessons/textbook_app.py（或直接複製 LESSONS 字典和
-#    render_lesson() 函式到你的專案模組裡）。
-# 2) 拿掉最上面的 `st.set_page_config(...)`（整個 app 只能設定一次）。
-# 3) 在 main_web.py 的側邊欄多加一個模式：
-#
-#        mode = st.sidebar.radio("학습 모드",
-#            ["40음 · 기초 단어 트레이너", "교재 학습 (세종한국어 1A)"])
-#
-#        if mode == "교재 학습 (세종한국어 1A)":
-#            from lessons.textbook_app import LESSONS, LESSON_ORDER, render_lesson
-#            lid = st.sidebar.radio("과 선택", LESSON_ORDER,
-#                format_func=lambda x: f"{x}과 · {LESSONS[x]['headline']}")
-#            render_lesson(lid)
-#        else:
-#            ...（原本 40音/單字 trainer 的程式碼）
-#
 # 第6~10課已依照同樣的資料格式加入 LESSONS 字典，並加進 LESSON_ORDER。
 # 若之後要再新增第11課以後的內容，同樣只要在 LESSONS 字典裡新增
 # LESSONS["11"] = {...}，並把 "11" 加進 LESSON_ORDER 即可，
 # 不需要改動任何渲染邏輯。
+
+
+if __name__ == "__main__":
+    # Allows standalone development/preview of just this module:
+    #     streamlit run lessons/textbook_app.py
+    # The deployed app instead imports render_textbook_mode() from
+    # main_web.py, which owns st.set_page_config().
+    st.set_page_config(page_title="세종한국어 1A", page_icon="📘", layout="centered")
+    render_textbook_mode()
