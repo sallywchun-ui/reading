@@ -158,7 +158,7 @@ CURRICULUM: Final[List[Phase]] = [
             StudyItem(prompt="우유", romanization="uyu", meaning="牛奶"),
             StudyItem(prompt="고기", romanization="gogi", meaning="肉"),
             StudyItem(prompt="사자", romanization="saja", meaning="獅子"),
-            StudyItem(prompt="바达", romanization="bada", meaning="大海"),
+            StudyItem(prompt="바다", romanization="bada", meaning="大海"),
             StudyItem(prompt="오이", romanization="oi", meaning="小黃瓜"),
             StudyItem(prompt="모자", romanization="moja", meaning="帽子"),
             StudyItem(prompt="치마", romanization="chima", meaning="裙子"),
