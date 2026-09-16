@@ -2,7 +2,9 @@
 """세종한국어 1A · 제1~10과 (Lessons 1-10) — Streamlit learning module.
 
 Renders vocabulary, grammar, dialogue/reading, and quiz tabs for each of the
-first ten lessons of the 세종한국어 1A textbook. This module is designed to be
+first ten lessons of the 세종한국어 1A textbook. Lessons 1-5 additionally get
+auto-generated practice: a 詞語填空 quiz scope and a sentence-building (組句)
+tab that assembles word tiles into complete sentences. This module is designed to be
 imported by main_web.py rather than run standalone: it defines the lesson
 data (``LESSONS``, ``LESSON_ORDER``) and rendering functions, and exposes a
 single entry point, ``render_textbook_mode()``, that main_web.py calls when
@@ -144,10 +146,25 @@ CUSTOM_CSS = """
   }
   .tag-text{ background:var(--jade-soft); color:var(--jade); }
   .tag-extra{ background:var(--gold-soft); color:var(--gold-ink); }
+  .tag-fill{ background:var(--clay-soft); color:var(--clay); }
   .q-text{
     font-family:"Noto Serif KR",serif; font-size:18px; font-weight:500; margin-bottom:6px; color:var(--ink);
   }
   .q-text .blank{ color:var(--clay); border-bottom:2px solid var(--clay); }
+
+  /* Sentence building (組句練習) */
+  .sb-label{ font-size:13px; color:var(--ink-soft); margin:12px 0 4px; }
+  .sb-result{
+    background:var(--paper); border:1px solid var(--line); border-radius:6px;
+    padding:14px 16px; margin:8px 0; font-size:16px; line-height:2.2;
+  }
+  .sb-tok{
+    display:inline-block; margin:0 4px; padding:2px 10px; border-radius:6px;
+    border:1px solid var(--line); color:var(--ink); background:var(--paper-alt);
+  }
+  .sb-tok.ok{ background:var(--jade-soft); border-color:var(--jade); color:var(--jade); }
+  .sb-tok.bad{ background:#3A211C; border-color:var(--wrong); color:var(--wrong); }
+  .sb-tok.miss{ background:transparent; border-style:dashed; color:var(--ink-soft); }
 
   footer, #MainMenu{ visibility:hidden; }
   .app-footer{ text-align:center; font-size:12px; color:var(--ink-soft); margin-top:30px; }
@@ -1550,11 +1567,151 @@ LESSON_ORDER = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 # 測驗題提示（羅馬拼音＋中文翻譯）目前開放的課次；題目的中文翻譯存在各題的 "zh" 欄位。
 QUIZ_HINT_LESSONS = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
 
+# 詞語填空練習（由單字卡例句自動生成），目前開放的課次；在「測驗」tab 以範圍選項呈現。
+FILL_IN_LESSONS = {"1", "2", "3", "4", "5"}
+
+# 組句練習（詞塊組裝成完整句子），目前開放的課次；以獨立「🧩 組句」tab 呈現。
+SENTENCE_BUILD_LESSONS = {"1", "2", "3", "4", "5"}
+
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 def _has_hangul(text):
     return any("가" <= ch <= "힣" for ch in text)
+
+
+# =========================================================
+# 1b. 練習題自動生成（第1~5課：詞語填空、組句）
+# =========================================================
+
+def _find_blank_span(text, word):
+    """Finds ``(start, end)`` of ``word`` inside ``text``.
+
+    Prefers a strict match where the word is bounded by non-alphanumerics, so
+    short words like "이" do not match inside a longer word; falls back to a
+    raw substring match so attached particles still work (e.g. "커피" inside
+    "커피를", "모자" inside "모자예요").
+    """
+    if not word:
+        return None
+    pat = re.compile(r"(?<![가-힣A-Za-z0-9])" + re.escape(word) + r"(?![가-힣A-Za-z0-9])")
+    m = pat.search(text)
+    if m:
+        return m.span()
+    i = text.find(word)
+    if i >= 0:
+        return (i, i + len(word))
+    return None
+
+
+def _build_fillin_pool(lesson):
+    """Auto-builds 詞語填空 questions from the vocab cards' (kr, zh, example) triples.
+
+    The target word is blanked out inside its example sentence; three
+    distractors are drawn from the same category first, then from the rest of
+    the lesson. Entries whose example is a conjugated form of the headword
+    (e.g. 맛있다 / 맛있어요) are skipped.
+    """
+    all_words = []
+    for _cat_kr, _cat_zh, words in lesson["vocab"]:
+        for kr, _zh, _ex in words:
+            if "/" not in kr and kr not in all_words:
+                all_words.append(kr)
+    pool = []
+    for _cat_kr, cat_zh, words in lesson["vocab"]:
+        cat_list = [kr for kr, _zh, _ex in words if "/" not in kr]
+        for kr, zh, example in words:
+            span = None
+            for cand in (kr.split("/") if "/" in kr else [kr]):
+                span = _find_blank_span(example, cand)
+                if span:
+                    break
+            if span is None:
+                continue
+            start, end = span
+            sent = example[:start] + '<span class="blank">___</span>' + example[end:]
+            choices, seen = [kr], {kr}
+            for cand in cat_list:
+                if len(choices) >= 4:
+                    break
+                if cand != kr and cand not in seen:
+                    choices.append(cand)
+                    seen.add(cand)
+            for cand in all_words:
+                if len(choices) >= 4:
+                    break
+                if cand not in seen:
+                    choices.append(cand)
+                    seen.add(cand)
+            pool.append({
+                "q": f"{sent}（要填入「{zh}」）",
+                "choices": choices,
+                "a": 0,
+                "zh": f"要填入「{zh}」（{cat_zh}）。",
+            })
+    _tag(pool, "填空")
+    return pool
+
+
+_SB_SPEAKER_SPLIT = re.compile(r"\s+[가나]\s*[:：]\s*")
+_SB_SPEAKER_PREFIX = re.compile(r"^\s*[가나]\s*[:：]\s*")
+
+
+def _sb_split_sentences(text):
+    """Cleans raw lesson text into short sentences.
+
+    Strips leading 「가: / 나:」 speaker prefixes, splits on embedded speaker
+    turns, then splits on sentence-final 「. / 。」 (punctuation stays attached
+    to the sentence it ends).
+    """
+    out = []
+    for seg in _SB_SPEAKER_SPLIT.split(text):
+        seg = _SB_SPEAKER_PREFIX.sub("", seg).strip()
+        if not seg:
+            continue
+        for part in re.split(r"(?<=[.。])\s*", seg):
+            part = part.strip()
+            if part:
+                out.append(part)
+    return out
+
+
+def _build_sentence_pool(lesson):
+    """Collects full sentences from dialogues / vocab examples / grammar examples.
+
+    Keeps 3-8 token sentences (whitespace-split). The Chinese translation is
+    attached only when a source line yields exactly one sentence, so the hint
+    always matches the displayed sentence.
+    """
+    seen = {}
+
+    def add(text, trans):
+        sents = _sb_split_sentences(text)
+        single = len(sents) == 1
+        for s in sents:
+            toks = s.split()
+            if not 3 <= len(toks) <= 8:
+                continue
+            cur = seen.get(s)
+            if cur is None:
+                seen[s] = {"sent": s, "tokens": toks, "trans": trans if single else ""}
+            elif not cur["trans"] and single and trans:
+                cur["trans"] = trans
+
+    for d in lesson["dialogues"]:
+        for _who, text, trans in d["lines"]:
+            add(text, trans or "")
+    for _cat_kr, _cat_zh, words in lesson["vocab"]:
+        for _kr, _zh, example in words:
+            add(example, "")
+    for g in lesson["grammar"]:
+        for line, _note in g["examples"]:
+            add(line.replace("<hl>", "").replace("</hl>", ""), "")
+    return list(seen.values())
+
+
+FILL_IN_QUESTIONS = {lid: _build_fillin_pool(LESSONS[lid]) for lid in FILL_IN_LESSONS}
+SENTENCE_QUESTIONS = {lid: _build_sentence_pool(LESSONS[lid]) for lid in SENTENCE_BUILD_LESSONS}
 
 
 # =========================================================
@@ -1571,20 +1728,30 @@ def _init_lesson_state(lid):
     ss.setdefault(f"{lid}_quiz_score", 0)
     ss.setdefault(f"{lid}_answered", False)
     ss.setdefault(f"{lid}_chosen", None)
+    # 組句練習（第1~5課）
+    ss.setdefault(f"{lid}_sb_order", None)
+    ss.setdefault(f"{lid}_sb_idx", 0)
+    ss.setdefault(f"{lid}_sb_score", 0)
+    ss.setdefault(f"{lid}_sb_submitted", False)
+    ss.setdefault(f"{lid}_sb_picked", [])
+    ss.setdefault(f"{lid}_sb_tiles", None)
+    ss.setdefault(f"{lid}_sb_last_correct", None)
 
 
-def _scope_pool(lesson, scope):
+def _scope_pool(lesson, scope, lid):
     if scope == "課文題":
         return lesson["textbook_questions"]
     if scope == "延伸題":
         return lesson["extra_questions"]
+    if scope == "詞語填空":
+        return FILL_IN_QUESTIONS.get(lid, [])
     return lesson["textbook_questions"] + lesson["extra_questions"]
 
 
 def _start_quiz(lid, lesson, scope):
     ss = st.session_state
     ss[f"{lid}_quiz_scope"] = scope
-    pool = _scope_pool(lesson, scope)
+    pool = _scope_pool(lesson, scope, lid)
     order = list(range(len(pool)))
     random.shuffle(order)
     ss[f"{lid}_quiz_order"] = order
@@ -1620,7 +1787,11 @@ def render_lesson(lid: str):
         unsafe_allow_html=True,
     )
 
-    tab_vocab, tab_grammar, tab_reading, tab_quiz = st.tabs(["📖 單字", "✏️ 文法", "💬 課文", "📝 測驗"])
+    tab_labels = ["📖 單字", "✏️ 文法", "💬 課文", "📝 測驗"]
+    if lid in SENTENCE_BUILD_LESSONS:
+        tab_labels.append("🧩 組句")
+    tabs = st.tabs(tab_labels)
+    tab_vocab, tab_grammar, tab_reading, tab_quiz = tabs[:4]
 
     # ---- 單字 ----
     with tab_vocab:
@@ -1739,6 +1910,8 @@ def render_lesson(lid: str):
     # ---- 測驗 ----
     with tab_quiz:
         scope_options = ["全部", "課文題", "延伸題"]
+        if lid in FILL_IN_LESSONS:
+            scope_options.append("詞語填空")
         scope_choice = st.radio(
             "選擇測驗範圍", scope_options, horizontal=True,
             index=scope_options.index(ss[f"{lid}_quiz_scope"]),
@@ -1747,7 +1920,7 @@ def render_lesson(lid: str):
         if scope_choice != ss[f"{lid}_quiz_scope"] or ss[f"{lid}_quiz_order"] is None:
             _start_quiz(lid, lesson, scope_choice)
 
-        pool = _scope_pool(lesson, ss[f"{lid}_quiz_scope"])
+        pool = _scope_pool(lesson, ss[f"{lid}_quiz_scope"], lid)
         order = ss[f"{lid}_quiz_order"]
 
         if not order:
@@ -1776,7 +1949,12 @@ def render_lesson(lid: str):
             st.progress(idx / len(order))
             st.caption(f"第 {idx + 1} / {len(order)} 題　·　目前分數：{ss[f'{lid}_quiz_score']}")
 
-            tag_class = "tag-extra" if item["tag"] == "延伸" else "tag-text"
+            if item["tag"] == "延伸":
+                tag_class = "tag-extra"
+            elif item["tag"] == "填空":
+                tag_class = "tag-fill"
+            else:
+                tag_class = "tag-text"
             st.markdown(f'<span class="q-tag {tag_class}">{item["tag"]}</span>', unsafe_allow_html=True)
             st.markdown(f'<div class="q-text">{item["q"]}</div>', unsafe_allow_html=True)
 
@@ -1837,6 +2015,150 @@ def render_lesson(lid: str):
                     ss[f"{lid}_answered"] = False
                     ss[f"{lid}_chosen"] = None
                     st.rerun()
+
+    if lid in SENTENCE_BUILD_LESSONS:
+        # ---- 組句（詞塊組裝成完整句子，第1~5課）----
+        with tabs[4]:
+            render_sentence_tab(lid)
+
+
+def render_sentence_tab(lid: str) -> None:
+    """Renders the 🧩 組句 tab for one lesson: tap word tiles, in order, to
+    assemble the complete sentence. One sentence at a time, with scoring, a
+    romanization/translation hint, and per-position feedback on submit.
+    """
+    ss = st.session_state
+    pool = SENTENCE_QUESTIONS.get(lid, [])
+    st.markdown(
+        '<p class="vocab-hint">🧩 依序點選下方的詞塊，組出完整的韓文句子；點「已排列」列的詞塊可放回詞庫。</p>',
+        unsafe_allow_html=True,
+    )
+    if not pool:
+        st.info("這個課次目前沒有組句題目。")
+        return
+
+    if ss[f"{lid}_sb_order"] is None:
+        order = list(range(len(pool)))
+        random.shuffle(order)
+        ss[f"{lid}_sb_order"] = order
+    order = ss[f"{lid}_sb_order"]
+
+    if ss[f"{lid}_sb_idx"] >= len(order):
+        score = ss[f"{lid}_sb_score"]
+        pct = round(score / len(order) * 100)
+        st.markdown(
+            f"""
+            <div style="text-align:center;padding:24px 8px;">
+              <div style="font-family:'Noto Serif KR',serif;font-size:48px;font-weight:700;color:var(--jade);">
+                {score}<span style="font-size:20px;color:var(--ink-soft);"> / {len(order)}</span>
+              </div>
+              <p style="color:var(--ink-soft);">組對率 {pct}%</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("再練一次", use_container_width=True, key=f"sb_retry_{lid}"):
+            new_order = list(range(len(pool)))
+            random.shuffle(new_order)
+            ss[f"{lid}_sb_order"] = new_order
+            ss[f"{lid}_sb_idx"] = 0
+            ss[f"{lid}_sb_score"] = 0
+            ss[f"{lid}_sb_submitted"] = False
+            ss[f"{lid}_sb_picked"] = []
+            ss[f"{lid}_sb_tiles"] = None
+            ss[f"{lid}_sb_last_correct"] = None
+            st.rerun()
+        return
+
+    idx = ss[f"{lid}_sb_idx"]
+    item = pool[order[idx]]
+    tokens = item["tokens"]
+
+    st.progress(idx / len(order))
+    st.caption(f"第 {idx + 1} / {len(order)} 句　·　目前分數：{ss[f'{lid}_sb_score']}")
+
+    hkey = f"sbhint_{lid}_{idx}"
+    hinted = hkey in ss[f"{lid}_hints"]
+    if st.button("🔤 提示" if not hinted else "🔤 隱藏提示", key=hkey, use_container_width=True):
+        if hinted:
+            ss[f"{lid}_hints"].discard(hkey)
+        else:
+            ss[f"{lid}_hints"].add(hkey)
+        st.rerun()
+    if hinted:
+        rom_html = f'<div class="rom-line"><span class="rom-label">拼音</span>{romanize(item["sent"])}</div>'
+        if item["trans"]:
+            rom_html += f'<div class="rom-line rom-zh"><span class="rom-label">中文</span>{item["trans"]}</div>'
+        st.markdown(f'<div class="roman-block">{rom_html}</div>', unsafe_allow_html=True)
+
+    if ss[f"{lid}_sb_tiles"] is None:
+        tiles = list(range(len(tokens)))
+        random.shuffle(tiles)
+        ss[f"{lid}_sb_tiles"] = tiles
+    tiles = ss[f"{lid}_sb_tiles"]
+    picked = ss[f"{lid}_sb_picked"]
+    remaining = [t for t in tiles if t not in picked]
+
+    if not ss[f"{lid}_sb_submitted"]:
+        # ---- 已排列列（點一下放回詞庫）----
+        st.markdown('<p class="sb-label">① 已排列（點一下可放回）</p>', unsafe_allow_html=True)
+        if not picked:
+            st.markdown('<p class="vocab-hint">（還未排列，請從下方詞庫點選）</p>', unsafe_allow_html=True)
+        for row_start in range(0, len(picked), 4):
+            chunk = picked[row_start:row_start + 4]
+            cols = st.columns(len(chunk))
+            for col, pos in zip(cols, chunk):
+                with col:
+                    if st.button(tokens[pos], key=f"sb_put_{lid}_{idx}_{pos}", use_container_width=True):
+                        ss[f"{lid}_sb_picked"].remove(pos)
+                        st.rerun()
+        # ---- 詞庫（點一下加入句子）----
+        st.markdown('<p class="sb-label">② 詞庫（點一下加入句子）</p>', unsafe_allow_html=True)
+        if not remaining:
+            st.markdown('<p class="vocab-hint">（詞庫已用完，可按下送送出）</p>', unsafe_allow_html=True)
+        for row_start in range(0, len(remaining), 4):
+            chunk = remaining[row_start:row_start + 4]
+            cols = st.columns(len(chunk))
+            for col, t in zip(cols, chunk):
+                with col:
+                    if st.button(tokens[t], key=f"sb_bank_{lid}_{idx}_{t}", use_container_width=True):
+                        ss[f"{lid}_sb_picked"].append(t)
+                        st.rerun()
+        if st.button("✓ 送出", type="primary", use_container_width=True, key=f"sb_submit_{lid}"):
+            assembled = " ".join(tokens[t] for t in picked)
+            ss[f"{lid}_sb_last_correct"] = assembled == " ".join(tokens)
+            if ss[f"{lid}_sb_last_correct"]:
+                ss[f"{lid}_sb_score"] += 1
+            ss[f"{lid}_sb_submitted"] = True
+            st.rerun()
+    else:
+        correct = ss[f"{lid}_sb_last_correct"]
+        if correct:
+            st.success("組對了！")
+        else:
+            st.error("還差一點 — 你的排列（綠色＝該位置詞塊正確）：")
+        marks = []
+        for i in range(len(tokens)):
+            if i < len(picked):
+                val = tokens[picked[i]]
+                cls = "ok" if val == tokens[i] else "bad"
+                marks.append(f'<span class="sb-tok {cls}">{val}</span>')
+            else:
+                marks.append('<span class="sb-tok miss">（缺）</span>')
+        st.markdown(f'<div class="sb-result">{"".join(marks)}</div>', unsafe_allow_html=True)
+        if not correct:
+            st.markdown(
+                f'<div class="roman-block"><div class="rom-line"><b>正確句子</b>：{item["sent"]}　'
+                f'<span class="rom-zh">（{romanize(item["sent"])}）</span></div></div>',
+                unsafe_allow_html=True,
+            )
+        if st.button("下一句 →", type="primary", use_container_width=True, key=f"sb_next_{lid}"):
+            ss[f"{lid}_sb_idx"] += 1
+            ss[f"{lid}_sb_submitted"] = False
+            ss[f"{lid}_sb_picked"] = []
+            ss[f"{lid}_sb_tiles"] = None
+            ss[f"{lid}_sb_last_correct"] = None
+            st.rerun()
 
 
 # =========================================================
