@@ -2,7 +2,7 @@
 """세종한국어 1A · 제1~10과 (Lessons 1-10) — Streamlit learning module.
 
 Renders vocabulary, grammar, dialogue/reading, and quiz tabs for each of the
-first ten lessons of the 세종한국어 1A textbook. Lessons 1-5 additionally get
+first ten lessons of the 세종한국어 1A textbook. Every lesson also gets
 auto-generated practice: a 詞語填空 quiz scope and a sentence-building (組句)
 tab that assembles word tiles into complete sentences. This module is designed to be
 imported by main_web.py rather than run standalone: it defines the lesson
@@ -175,7 +175,7 @@ CUSTOM_CSS = """
 
 
 # =========================================================
-# 1. 資料：第1~5과
+# 1. 資料：第1~10과
 # =========================================================
 
 def _tag(qs, tag):
@@ -1568,10 +1568,10 @@ LESSON_ORDER = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 QUIZ_HINT_LESSONS = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
 
 # 詞語填空練習（由單字卡例句自動生成），目前開放的課次；在「測驗」tab 以範圍選項呈現。
-FILL_IN_LESSONS = {"1", "2", "3", "4", "5"}
+FILL_IN_LESSONS = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
 
 # 組句練習（詞塊組裝成完整句子），目前開放的課次；以獨立「🧩 組句」tab 呈現。
-SENTENCE_BUILD_LESSONS = {"1", "2", "3", "4", "5"}
+SENTENCE_BUILD_LESSONS = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
@@ -1581,7 +1581,7 @@ def _has_hangul(text):
 
 
 # =========================================================
-# 1b. 練習題自動生成（第1~5課：詞語填空、組句）
+# 1b. 練習題自動生成（全課：詞語填空、組句）
 # =========================================================
 
 def _find_blank_span(text, word):
@@ -1728,7 +1728,7 @@ def _init_lesson_state(lid):
     ss.setdefault(f"{lid}_quiz_score", 0)
     ss.setdefault(f"{lid}_answered", False)
     ss.setdefault(f"{lid}_chosen", None)
-    # 組句練習（第1~5課）
+    # 組句練習
     ss.setdefault(f"{lid}_sb_order", None)
     ss.setdefault(f"{lid}_sb_idx", 0)
     ss.setdefault(f"{lid}_sb_score", 0)
@@ -2017,7 +2017,7 @@ def render_lesson(lid: str):
                     st.rerun()
 
     if lid in SENTENCE_BUILD_LESSONS:
-        # ---- 組句（詞塊組裝成完整句子，第1~5課）----
+        # ---- 組句（詞塊組裝成完整句子）----
         with tabs[4]:
             render_sentence_tab(lid)
 
@@ -2027,6 +2027,7 @@ def render_sentence_tab(lid: str) -> None:
     assemble the complete sentence. One sentence at a time, with scoring, a
     romanization/translation hint, and per-position feedback on submit.
     """
+
     ss = st.session_state
     pool = SENTENCE_QUESTIONS.get(lid, [])
     st.markdown(
