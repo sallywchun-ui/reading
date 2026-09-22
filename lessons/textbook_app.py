@@ -147,6 +147,7 @@ CUSTOM_CSS = """
   .tag-text{ background:var(--jade-soft); color:var(--jade); }
   .tag-extra{ background:var(--gold-soft); color:var(--gold-ink); }
   .tag-fill{ background:var(--clay-soft); color:var(--clay); }
+  .tag-lesson{ background:transparent; color:var(--ink-soft); border:1px solid var(--line); margin-right:6px; }
   .q-text{
     font-family:"Noto Serif KR",serif; font-size:18px; font-weight:500; margin-bottom:6px; color:var(--ink);
   }
@@ -1762,6 +1763,219 @@ def _start_quiz(lid, lesson, scope):
     ss[f"{lid}_hints"] = {k for k in ss[f"{lid}_hints"] if not k.startswith("quiz_hint_")}
 
 
+# ---- 混合測驗（跨課程）----
+MIX_NS = "mix"
+MIX_COUNT_OPTIONS = [10, 20, 30, "全部"]
+
+
+def _init_mix_state():
+    ss = st.session_state
+    ss.setdefault(f"{MIX_NS}_hints", set())
+    ss.setdefault(f"{MIX_NS}_quiz_config", None)
+    ss.setdefault(f"{MIX_NS}_quiz_order", None)
+    ss.setdefault(f"{MIX_NS}_quiz_idx", 0)
+    ss.setdefault(f"{MIX_NS}_quiz_score", 0)
+    ss.setdefault(f"{MIX_NS}_answered", False)
+    ss.setdefault(f"{MIX_NS}_chosen", None)
+
+
+def _mix_candidates(lids, scope):
+    """All ``(lid, question_index)`` pairs for the chosen lessons and scope."""
+    return [(lid, qi)
+            for lid in lids
+            for qi in range(len(_scope_pool(LESSONS[lid], scope, lid)))]
+
+
+def _start_mix_quiz(lids, scope, count):
+    ss = st.session_state
+    order = _mix_candidates(lids, scope)
+    random.shuffle(order)
+    if count != "全部":
+        order = order[:count]
+    ss[f"{MIX_NS}_quiz_config"] = (tuple(lids), scope, count)
+    ss[f"{MIX_NS}_quiz_order"] = order
+    ss[f"{MIX_NS}_quiz_idx"] = 0
+    ss[f"{MIX_NS}_quiz_score"] = 0
+    ss[f"{MIX_NS}_answered"] = False
+    ss[f"{MIX_NS}_chosen"] = None
+    ss[f"{MIX_NS}_hints"] = set()
+
+
+def _render_quiz_run(ns, entries, on_retry, empty_msg, show_lesson=False):
+    """Renders one quiz run: progress, question, hint, choices, next / score screen.
+
+    Shared by the per-lesson 📝 測驗 tab and the cross-lesson 混合測驗 page.
+    Progress state lives under ``{ns}_quiz_idx / _quiz_score / _answered /
+    _chosen / _hints``.
+
+    Args:
+        ns: Session-state namespace (a lesson id, or MIX_NS).
+        entries: ``(qid, question, source_lid)`` in the order they are asked;
+            ``qid`` must be unique within the run.
+        on_retry: Called when 「再測一次」 is pressed, to reset the run.
+        empty_msg: Shown when ``entries`` is empty.
+        show_lesson: Whether to show a 「第 N 課」 chip for each question.
+    """
+    ss = st.session_state
+    if not entries:
+        st.info(empty_msg)
+        return
+
+    total = len(entries)
+    if ss[f"{ns}_quiz_idx"] >= total:
+        score = ss[f"{ns}_quiz_score"]
+        pct = round(score / total * 100)
+        st.markdown(
+            f"""
+            <div style="text-align:center;padding:24px 8px;">
+              <div style="font-family:'Noto Serif KR',serif;font-size:48px;font-weight:700;color:var(--jade);">
+                {score}<span style="font-size:20px;color:var(--ink-soft);"> / {total}</span>
+              </div>
+              <p style="color:var(--ink-soft);">答對率 {pct}%</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("再測一次", use_container_width=True, key=f"retry_{ns}"):
+            on_retry()
+            st.rerun()
+        return
+
+    idx = ss[f"{ns}_quiz_idx"]
+    qid, item, src_lid = entries[idx]
+
+    st.progress(idx / total)
+    st.caption(f"第 {idx + 1} / {total} 題　·　目前分數：{ss[f'{ns}_quiz_score']}")
+
+    if item["tag"] == "延伸":
+        tag_class = "tag-extra"
+    elif item["tag"] == "填空":
+        tag_class = "tag-fill"
+    else:
+        tag_class = "tag-text"
+    lesson_chip = f'<span class="q-tag tag-lesson">第 {src_lid} 課</span>' if show_lesson else ""
+    st.markdown(f'{lesson_chip}<span class="q-tag {tag_class}">{item["tag"]}</span>', unsafe_allow_html=True)
+    st.markdown(f'<div class="q-text">{item["q"]}</div>', unsafe_allow_html=True)
+
+    order_key = f"choice_order_{ns}_{idx}_{qid}"
+    if order_key not in ss:
+        choice_idx = list(range(len(item["choices"])))
+        random.shuffle(choice_idx)
+        ss[order_key] = choice_idx
+    choice_order = ss[order_key]
+
+    if src_lid in QUIZ_HINT_LESSONS:
+        qkey = f"quiz_hint_{order_key}"
+        is_hinted = qkey in ss[f"{ns}_hints"]
+        if st.button("🔤 提示" if not is_hinted else "🔤 隱藏提示",
+                     key=qkey, use_container_width=True):
+            if is_hinted:
+                ss[f"{ns}_hints"].discard(qkey)
+            else:
+                ss[f"{ns}_hints"].add(qkey)
+            st.rerun()
+        if is_hinted:
+            q_plain = _HTML_TAG_RE.sub("", item["q"])
+            rom_html = f'<div class="rom-line"><span class="rom-label">拼音</span>{romanize(q_plain)}</div>'
+            if item.get("zh"):
+                rom_html += (f'<div class="rom-line rom-zh"><span class="rom-label">中文</span>'
+                             f'{item["zh"]}</div>')
+            kr_choices = [item["choices"][ci] for ci in choice_order
+                          if _has_hangul(item["choices"][ci])]
+            if kr_choices:
+                rom_html += ('<div class="rom-line"><span class="rom-label">選項</span>'
+                             + "　／　".join(f'{c} {romanize(c)}' for c in kr_choices)
+                             + "</div>")
+            st.markdown(f'<div class="roman-block">{rom_html}</div>', unsafe_allow_html=True)
+
+    for ci in choice_order:
+        choice_text = item["choices"][ci]
+        btn_key = f"opt_{order_key}_{ci}"
+        if not ss[f"{ns}_answered"]:
+            if st.button(choice_text, key=btn_key, use_container_width=True):
+                ss[f"{ns}_answered"] = True
+                ss[f"{ns}_chosen"] = ci
+                if ci == item["a"]:
+                    ss[f"{ns}_quiz_score"] += 1
+                st.rerun()
+        else:
+            if ci == item["a"]:
+                st.success(choice_text, icon="✅")
+            elif ci == ss[f"{ns}_chosen"]:
+                st.error(choice_text, icon="❌")
+            else:
+                st.button(choice_text, key=btn_key, use_container_width=True, disabled=True)
+
+    if ss[f"{ns}_answered"]:
+        feedback = "答對了！" if ss[f"{ns}_chosen"] == item["a"] else "再想想 — 正確答案已標示為綠色。"
+        st.caption(feedback)
+        if st.button("下一題 →", type="primary", key=f"next_{ns}"):
+            ss[f"{ns}_quiz_idx"] += 1
+            ss[f"{ns}_answered"] = False
+            ss[f"{ns}_chosen"] = None
+            st.rerun()
+
+
+def render_mix_quiz() -> None:
+    """Renders the 🔀 混合測驗 page: pick lessons, a scope and a question count,
+    then take one shuffled quiz drawn from all the chosen lessons.
+    """
+    _init_mix_state()
+    ss = st.session_state
+
+    st.markdown(
+        """
+        <div class="hero">
+          <div class="book-tag">세종한국어 1A</div>
+          <div class="headline">🔀 混合測驗</div>
+          <span class="goal-pill">自選課程，把多課的題目打散一起測</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    lids = st.multiselect(
+        "選擇課程",
+        LESSON_ORDER,
+        default=LESSON_ORDER,
+        format_func=lambda lid: f"{lid}과 · {LESSONS[lid]['headline']}",
+        key="mix_lessons_select",
+    )
+    lids = [lid for lid in LESSON_ORDER if lid in lids]  # 固定依課次排序
+
+    # 選項固定不隨課程變動，避免已選的題型從 radio 消失；未開放填空的課次在 _scope_pool 會回傳空清單。
+    scope_options = ["全部", "課文題", "延伸題", "詞語填空"]
+    scope = st.radio("題型", scope_options, horizontal=True, key="mix_scope_radio")
+    count = st.radio("題數", MIX_COUNT_OPTIONS, horizontal=True, index=1, key="mix_count_radio")
+
+    available = len(_mix_candidates(lids, scope))
+    st.caption(f"已選 {len(lids)} 課，符合條件的題目共 {available} 題")
+
+    config = (tuple(lids), scope, count)
+    running = ss[f"{MIX_NS}_quiz_order"] is not None
+    label = "開始測驗" if not running else "🔄 依目前設定重新出題"
+    if st.button(label, type="primary", use_container_width=True,
+                 disabled=available == 0, key="mix_start"):
+        _start_mix_quiz(lids, scope, count)
+        st.rerun()
+
+    if not running:
+        st.info("選好課程、題型與題數後，按「開始測驗」。")
+        return
+    if config != ss[f"{MIX_NS}_quiz_config"]:
+        st.caption("⚠️ 設定已變更 — 目前進行中的仍是舊設定，按上方按鈕套用新設定。")
+
+    st.divider()
+    run_lids, run_scope, run_count = ss[f"{MIX_NS}_quiz_config"]
+    entries = [(f"{run_scope}_{lid}_{qi}", _scope_pool(LESSONS[lid], run_scope, lid)[qi], lid)
+               for lid, qi in ss[f"{MIX_NS}_quiz_order"]]
+
+    def _retry():
+        _start_mix_quiz(list(run_lids), run_scope, run_count)
+
+    _render_quiz_run(MIX_NS, entries, _retry, empty_msg="目前的設定沒有題目。", show_lesson=True)
+
+
 # =========================================================
 # 3. 課程渲染（單一課程共用的畫面邏輯）
 # =========================================================
@@ -1920,101 +2134,14 @@ def render_lesson(lid: str):
         if scope_choice != ss[f"{lid}_quiz_scope"] or ss[f"{lid}_quiz_order"] is None:
             _start_quiz(lid, lesson, scope_choice)
 
-        pool = _scope_pool(lesson, ss[f"{lid}_quiz_scope"], lid)
-        order = ss[f"{lid}_quiz_order"]
+        scope = ss[f"{lid}_quiz_scope"]
+        pool = _scope_pool(lesson, scope, lid)
+        entries = [(f"{scope}_{qi}", pool[qi], lid) for qi in ss[f"{lid}_quiz_order"]]
 
-        if not order:
-            st.info("這個分類目前沒有題目。")
-        elif ss[f"{lid}_quiz_idx"] >= len(order):
-            score = ss[f"{lid}_quiz_score"]
-            pct = round(score / len(order) * 100)
-            st.markdown(
-                f"""
-                <div style="text-align:center;padding:24px 8px;">
-                  <div style="font-family:'Noto Serif KR',serif;font-size:48px;font-weight:700;color:var(--jade);">
-                    {score}<span style="font-size:20px;color:var(--ink-soft);"> / {len(order)}</span>
-                  </div>
-                  <p style="color:var(--ink-soft);">答對率 {pct}%</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            if st.button("再測一次", use_container_width=True, key=f"retry_{lid}"):
-                _start_quiz(lid, lesson, ss[f"{lid}_quiz_scope"])
-                st.rerun()
-        else:
-            idx = ss[f"{lid}_quiz_idx"]
-            item = pool[order[idx]]
+        def _retry():
+            _start_quiz(lid, lesson, ss[f"{lid}_quiz_scope"])
 
-            st.progress(idx / len(order))
-            st.caption(f"第 {idx + 1} / {len(order)} 題　·　目前分數：{ss[f'{lid}_quiz_score']}")
-
-            if item["tag"] == "延伸":
-                tag_class = "tag-extra"
-            elif item["tag"] == "填空":
-                tag_class = "tag-fill"
-            else:
-                tag_class = "tag-text"
-            st.markdown(f'<span class="q-tag {tag_class}">{item["tag"]}</span>', unsafe_allow_html=True)
-            st.markdown(f'<div class="q-text">{item["q"]}</div>', unsafe_allow_html=True)
-
-            order_key = f"choice_order_{lid}_{ss[f'{lid}_quiz_scope']}_{idx}_{order[idx]}"
-            if order_key not in ss:
-                choice_idx = list(range(len(item["choices"])))
-                random.shuffle(choice_idx)
-                ss[order_key] = choice_idx
-            choice_order = ss[order_key]
-
-            if lid in QUIZ_HINT_LESSONS:
-                qkey = f"quiz_hint_{order_key}"
-                is_hinted = qkey in ss[f"{lid}_hints"]
-                if st.button("🔤 提示" if not is_hinted else "🔤 隱藏提示",
-                             key=qkey, use_container_width=True):
-                    if is_hinted:
-                        ss[f"{lid}_hints"].discard(qkey)
-                    else:
-                        ss[f"{lid}_hints"].add(qkey)
-                    st.rerun()
-                if is_hinted:
-                    q_plain = _HTML_TAG_RE.sub("", item["q"])
-                    rom_html = f'<div class="rom-line"><span class="rom-label">拼音</span>{romanize(q_plain)}</div>'
-                    if item.get("zh"):
-                        rom_html += (f'<div class="rom-line rom-zh"><span class="rom-label">中文</span>'
-                                     f'{item["zh"]}</div>')
-                    kr_choices = [item["choices"][ci] for ci in choice_order
-                                  if _has_hangul(item["choices"][ci])]
-                    if kr_choices:
-                        rom_html += ('<div class="rom-line"><span class="rom-label">選項</span>'
-                                     + "　／　".join(f'{c} {romanize(c)}' for c in kr_choices)
-                                     + "</div>")
-                    st.markdown(f'<div class="roman-block">{rom_html}</div>', unsafe_allow_html=True)
-
-            for ci in choice_order:
-                choice_text = item["choices"][ci]
-                btn_key = f"opt_{order_key}_{ci}"
-                if not ss[f"{lid}_answered"]:
-                    if st.button(choice_text, key=btn_key, use_container_width=True):
-                        ss[f"{lid}_answered"] = True
-                        ss[f"{lid}_chosen"] = ci
-                        if ci == item["a"]:
-                            ss[f"{lid}_quiz_score"] += 1
-                        st.rerun()
-                else:
-                    if ci == item["a"]:
-                        st.success(choice_text, icon="✅")
-                    elif ci == ss[f"{lid}_chosen"]:
-                        st.error(choice_text, icon="❌")
-                    else:
-                        st.button(choice_text, key=btn_key, use_container_width=True, disabled=True)
-
-            if ss[f"{lid}_answered"]:
-                feedback = "答對了！" if ss[f"{lid}_chosen"] == item["a"] else "再想想 — 正確答案已標示為綠色。"
-                st.caption(feedback)
-                if st.button("下一題 →", type="primary", key=f"next_{lid}"):
-                    ss[f"{lid}_quiz_idx"] += 1
-                    ss[f"{lid}_answered"] = False
-                    ss[f"{lid}_chosen"] = None
-                    st.rerun()
+        _render_quiz_run(lid, entries, _retry, empty_msg="這個分類目前沒有題目。")
 
     if lid in SENTENCE_BUILD_LESSONS:
         # ---- 組句（詞塊組裝成完整句子）----
@@ -2181,13 +2308,17 @@ def render_textbook_mode() -> None:
 
     st.sidebar.markdown("### 📘 세종한국어 1A")
     lesson_labels = {lid: f"{lid}과 · {LESSONS[lid]['headline']}" for lid in LESSON_ORDER}
+    lesson_labels[MIX_NS] = "🔀 混合測驗（自選課程）"
     selected = st.sidebar.radio(
         "과 선택",
-        LESSON_ORDER,
+        LESSON_ORDER + [MIX_NS],
         format_func=lambda lid: lesson_labels[lid],
     )
 
-    render_lesson(selected)
+    if selected == MIX_NS:
+        render_mix_quiz()
+    else:
+        render_lesson(selected)
 
     st.markdown(
         '<div class="app-footer">세종한국어 1A · 국립국어원 교재 데이터를 바탕으로 제작</div>',
